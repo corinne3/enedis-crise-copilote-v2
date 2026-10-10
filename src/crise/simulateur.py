@@ -21,6 +21,16 @@ Règles simulées (hypothèses H3, H7, H8 du plan) :
     - indisponibilités (stress) : l'équipe termine son chantier en cours (sécurité), puis passe HORS_SERVICE ;
     - forcées / interdites (décision humaine, T1.8) : appliquées avant la stratégie ;
     - Monte Carlo (option) : durée réelle et vitesse réelle tirées au hasard, la stratégie ne voit que le nominal.
+
+V2 — pause repas et fatigue (désactivées par défaut : la V1 est inchangée) :
+    - fatigue : un dépannage dure nominal × (1 + pente × max(0, heures de travail depuis la dernière pause − seuil)),
+      plafonné ; les heures de travail = trajets + chantiers depuis la dernière pause (ou le début d'amplitude) ;
+    - pause (45 min, sur place, comptée dans l'amplitude, prise à la FIN d'un chantier, jamais pendant) :
+        mode « fixe »        : dès que le travail depuis la dernière pause atteint seuil_min (4h, début de fatigue) ;
+        mode « intelligente » : forcée à seuil_force_min (6h) ; opportuniste dès seuil_opportuniste_min (3h)
+                                si aucun incident en attente n'est à moins de rayon_min de trajet,
+                                et si moins de part_max_site des équipes du site sont déjà en pause (décalage) ;
+    - la règle d'amplitude tient compte de la fatigue (durée attendue = nominal × facteur de fatigue actuel).
 """
 from __future__ import annotations
 
@@ -55,8 +65,23 @@ DUREE_MIN_DEPANNAGE = 120          # 2h : plus petite durée possible → seuil 
 HORIZON_MAX_MIN = 14 * 24 * 60     # garde-fou : 14 jours simulés au maximum
 
 # Ordre de traitement des événements simultanés (les plus « libérateurs » d'abord)
-_PRIO = {"FIN_CHANTIER": 0, "ARRIVEE": 1, "FIN_RETOUR": 2, "FIN_REPOS": 3, "FIN_HS": 4,
+_PRIO = {"FIN_CHANTIER": 0, "ARRIVEE": 1, "FIN_RETOUR": 2, "FIN_REPOS": 3, "FIN_PAUSE": 3, "FIN_HS": 4,
          "INDISPO": 5, "FIN_AMPLITUDE": 6, "APPARITION": 7}
+
+
+# V2 — valeurs par défaut (désactivées)
+PAUSE_DEFAUT = {"actif": False, "mode": "fixe", "duree_min": 45, "seuil_min": 240,
+                "seuil_opportuniste_min": 180, "seuil_force_min": 360, "rayon_min": 30, "part_max_site": 0.5}
+FATIGUE_DEFAUT = {"actif": False, "seuil_h": 4.0, "pente_par_h": 0.05, "max": 1.5}
+
+
+def facteur_fatigue(travail_min: float, params: dict) -> float:
+    """Allongement des dépannages dû à la fatigue (1.0 = pas d'effet)."""
+    f = params.get("fatigue") or {}
+    if not f.get("actif"):
+        return 1.0
+    h = max(0.0, travail_min / 60 - float(f.get("seuil_h", 4.0)))
+    return min(float(f.get("max", 1.5)), 1.0 + float(f.get("pente_par_h", 0.05)) * h)
 
 
 # --------------------------------------------------------------------------- contraintes (pour les stratégies)
@@ -70,7 +95,11 @@ def est_faisable(equipe: Equipe, incident: Incident, trajet: float, t: int, para
     et couple (équipe, incident) non interdit par le responsable (params["interdites"])."""
     if (equipe.id_equipe, incident.id_incident) in params.get("interdites", ()):
         return False
-    return trajet + incident.duree_nominale <= amplitude_restante(equipe, t, params)
+    duree = incident.duree_nominale
+    travail = (params.get("_travail_depuis_pause") or {}).get(equipe.id_equipe)
+    if travail is not None:                                   # V2 : durée attendue avec la fatigue actuelle
+        duree = duree * facteur_fatigue(travail + trajet, params)
+    return trajet + duree <= amplitude_restante(equipe, t, params)
 
 
 # --------------------------------------------------------------------------- paramètres
@@ -91,10 +120,12 @@ def parametres_simulation(cfg: dict | None = None, **surcharges) -> dict:
         "monte_carlo": {"actif": False, **cfg.get("monte_carlo", {})},
         "trajet": dict(cfg["trajet"]),
         "seed": int(cfg.get("seed", 42)),
+        "pause": {**PAUSE_DEFAUT, **cfg.get("pause", {})},          # V2
+        "fatigue": {**FATIGUE_DEFAUT, **cfg.get("fatigue", {})},    # V2
     }
     for k, v in surcharges.items():
-        if k == "monte_carlo" and isinstance(v, dict):
-            p["monte_carlo"] = {**p["monte_carlo"], **v}
+        if k in ("monte_carlo", "pause", "fatigue") and isinstance(v, dict):
+            p[k] = {**p[k], **v}
         else:
             p[k] = v
     return p
@@ -161,6 +192,14 @@ class Simulateur:
         self.decisions: list[dict] = []
         self.rejets: list[dict] = []
         self.rng = np.random.default_rng(self.params.get("seed", 42))
+        # V2 : travail cumulé depuis la dernière pause (visible des stratégies via est_faisable)
+        self._travail: dict[str, int] = {e.id_equipe: 0 for e in equipes}
+        self._debut_mission: dict[str, int] = {}
+        self._en_pause: set[str] = set()
+        self.nb_pauses = 0
+        self._facteurs_fatigue: list[float] = []
+        if (self.params.get("fatigue") or {}).get("actif"):
+            self.params["_travail_depuis_pause"] = self._travail
         self._appliquer_monte_carlo_durees()
 
     # ------------------------------------------------------------------ utilitaires
@@ -196,8 +235,8 @@ class Simulateur:
         self._activite_en_cours[eq.id_equipe] = a
 
     # ------------------------------------------------------------------ transitions d'équipe
-    def _liberer(self, eq: Equipe, t: int) -> None:
-        """L'équipe vient de finir quelque chose : hors service, repos ou disponible ?"""
+    def _liberer(self, eq: Equipe, t: int, apres_pause: bool = False) -> None:
+        """L'équipe vient de finir quelque chose : hors service, repos, pause ou disponible ?"""
         if eq.id_equipe in self._hs_en_attente:
             t_fin = self._hs_en_attente.pop(eq.id_equipe)
             eq.etat = EtatEquipe.HORS_SERVICE
@@ -210,9 +249,41 @@ class Simulateur:
         if amplitude_restante(eq, t, self.params) < DUREE_MIN_DEPANNAGE:
             self._partir_repos(eq, t)
             return
+        if not apres_pause and self._doit_faire_pause(eq, t):
+            self._partir_pause(eq, t)
+            return
         eq.etat = EtatEquipe.DISPONIBLE
         eq.t_libre = t
         eq.id_incident = None
+
+    # ------------------------------------------------------------------ V2 : pause repas
+    def _doit_faire_pause(self, eq: Equipe, t: int) -> bool:
+        p = self.params.get("pause") or {}
+        if not p.get("actif"):
+            return False
+        travail = self._travail[eq.id_equipe]
+        if p.get("mode", "fixe") == "fixe":
+            return travail >= int(p["seuil_min"])
+        if travail >= int(p["seuil_force_min"]):
+            return True
+        if travail < int(p["seuil_opportuniste_min"]):
+            return False
+        meme_site = [e for e in self.equipes.values() if e.id_site == eq.id_site]
+        en_pause = sum(1 for e in meme_site if e.id_equipe in self._en_pause)
+        if en_pause >= max(1, int(len(meme_site) * float(p["part_max_site"]))):
+            return False                                     # décalage : pas tout le site en pause
+        proche = any(self.trajet_min(eq.lat, eq.lon, i.lat, i.lon) <= float(p["rayon_min"])
+                     for i in self.incidents.values() if i.etat is EtatIncident.EN_ATTENTE)
+        return not proche                                    # opportuniste : rien d'urgent à côté
+
+    def _partir_pause(self, eq: Equipe, t: int) -> None:
+        duree = int((self.params.get("pause") or {}).get("duree_min", 45))
+        eq.etat = EtatEquipe.REPOS                           # indisponible pour les stratégies
+        eq.t_libre = t + duree
+        self._en_pause.add(eq.id_equipe)
+        self.nb_pauses += 1
+        self._ouvrir(eq, "pause", t, t + duree, None, (eq.lat, eq.lon), (eq.lat, eq.lon))
+        self._pousser(t + duree, "FIN_PAUSE", eq.id_equipe)
 
     def _partir_repos(self, eq: Equipe, t: int) -> None:
         site = self.sites[eq.id_site]
@@ -225,6 +296,7 @@ class Simulateur:
 
     def _nouvelle_amplitude(self, eq: Equipe, t: int) -> None:
         eq.t_debut_service = t
+        self._travail[eq.id_equipe] = 0
         eq.etat = EtatEquipe.DISPONIBLE
         eq.t_libre = t
         self._pousser(t + int(self.params["amplitude_max_min"]), "FIN_AMPLITUDE", eq.id_equipe)
@@ -244,6 +316,11 @@ class Simulateur:
             eq.lat, eq.lon = inc.lat, inc.lon
             inc.etat = EtatIncident.EN_COURS
             inc.t_arrivee = t
+            if (self.params.get("fatigue") or {}).get("actif"):   # V2 : la fatigue allonge le dépannage
+                trajet_fait = t - self._debut_mission.get(eq.id_equipe, t)
+                f = facteur_fatigue(self._travail[eq.id_equipe] + trajet_fait, self.params)
+                self._facteurs_fatigue.append(f)
+                inc.duree_reelle = int(round(inc.duree_reelle * f))
             fin = t + int(inc.duree_reelle)
             eq.t_libre = fin
             self._ouvrir(eq, "chantier", t, fin, inc, (inc.lat, inc.lon), (inc.lat, inc.lon))
@@ -253,6 +330,7 @@ class Simulateur:
             inc.etat = EtatIncident.RESOLU
             inc.t_resolution = t
             eq.id_incident = None
+            self._travail[eq.id_equipe] += t - self._debut_mission.pop(eq.id_equipe, t)
             self._liberer(eq, t)
         elif e.type == "FIN_RETOUR":
             site = self.sites[eq.id_site]
@@ -267,14 +345,20 @@ class Simulateur:
                     self._liberer(eq, t)
                 else:
                     self._nouvelle_amplitude(eq, t)
+        elif e.type == "FIN_PAUSE":
+            if eq.id_equipe in self._en_pause:
+                self._en_pause.discard(eq.id_equipe)
+                self._travail[eq.id_equipe] = 0
+                self._liberer(eq, t, apres_pause=True)
         elif e.type == "FIN_HS":
             if eq.etat is EtatEquipe.HORS_SERVICE:
                 self._nouvelle_amplitude(eq, t)       # repart reposée (hypothèse)
         elif e.type == "INDISPO":
             t_fin = self._indispo_fin[e.seq]
             if eq.etat in (EtatEquipe.DISPONIBLE, EtatEquipe.REPOS):
-                if eq.etat is EtatEquipe.REPOS:      # on coupe le repos à t
+                if eq.etat is EtatEquipe.REPOS:      # on coupe le repos (ou la pause) à t
                     self._activite_en_cours[eq.id_equipe]["t_fin"] = t
+                    self._en_pause.discard(eq.id_equipe)
                 self._hs_en_attente[eq.id_equipe] = t_fin
                 self._liberer(eq, t)
             else:                                     # trajet / chantier / retour : il finit d'abord
@@ -303,6 +387,7 @@ class Simulateur:
             )
         nominal = self.trajet_min(eq.lat, eq.lon, inc.lat, inc.lon)
         duree = self._trajet_reel(nominal)
+        self._debut_mission[eq.id_equipe] = t
         eq.etat = EtatEquipe.TRAJET
         eq.id_incident = inc.id_incident
         eq.t_libre = t + duree + inc.duree_reelle
@@ -439,8 +524,10 @@ class Simulateur:
             "monte_carlo": bool(self._mc().get("actif")),
             "seed": self.params.get("seed"),
             "duree_calcul_s": round(duree_s, 3),
+            "nb_pauses": self.nb_pauses,
+            "fatigue_moyenne": round(float(np.mean(self._facteurs_fatigue)), 3) if self._facteurs_fatigue else 1.0,
             "params": {k: (sorted(v) if isinstance(v, frozenset) else v)
-                       for k, v in self.params.items() if k != "trajet"},
+                       for k, v in self.params.items() if k not in ("trajet", "_travail_depuis_pause")},
         }
         if non_resolus:
             log.warning("%s incidents non résolus (plus aucune équipe ne peut les prendre)", non_resolus)
@@ -466,7 +553,7 @@ def construire_serie(df_inc: pd.DataFrame, df_act: pd.DataFrame, nb_equipes: int
         en_attente = int(((app <= t) & (aff > t)).sum())
         actifs = df_act[(df_act["t_debut"] <= t) & (df_act["t_fin"] > t)]
         occupees = int(actifs["type"].isin(["trajet", "chantier"]).sum())
-        repos = int(actifs["type"].isin(["retour", "repos"]).sum())
+        repos = int(actifs["type"].isin(["retour", "repos", "pause"]).sum())
         hs = int((actifs["type"] == "hors_service").sum())
         lignes.append({"t": int(t), "clients_coupes": int(sum(vus.values())), "incidents_attente": en_attente,
                        "equipes_occupees": occupees, "equipes_repos": repos, "equipes_hs": hs,

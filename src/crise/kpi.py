@@ -51,6 +51,20 @@ def depassements_amplitude(res: SimResult) -> int:
     return n
 
 
+def travail_max_sans_pause_h(res: SimResult) -> float:
+    """Plus longue durée de travail (trajets + chantiers) enchaînée sans pause ni repos, en heures (V2)."""
+    pire = 0
+    for _, g in res.activites.sort_values(["id_equipe", "t_debut"]).groupby("id_equipe"):
+        cumul = 0
+        for r in g.itertuples():
+            if r.type in ("pause", "repos", "hors_service"):
+                cumul = 0
+            elif r.type in ("trajet", "chantier"):
+                cumul += r.t_fin - r.t_debut
+                pire = max(pire, cumul)
+    return round(pire / 60, 2)
+
+
 def calculer_kpi(res: SimResult) -> dict:
     inc = res.incidents.copy()
     resolus = inc.dropna(subset=["t_resolution"])
@@ -96,6 +110,9 @@ def calculer_kpi(res: SimResult) -> dict:
         "part_trajet_pct": float(100 * temps_trajet / (temps_trajet + temps_chantier)) if temps_chantier else 0.0,
         "depassements_amplitude": depassements_amplitude(res),
         "non_resolus": int(res.metadata.get("non_resolus", 0)),
+        "nb_pauses": int(res.metadata.get("nb_pauses", 0)),                       # V2
+        "fatigue_moyenne": float(res.metadata.get("fatigue_moyenne", 1.0)),       # V2
+        "travail_max_sans_pause_h": travail_max_sans_pause_h(res),                # V2
         "nb_incidents": int(len(inc)),
     }
 
