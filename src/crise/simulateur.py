@@ -31,6 +31,11 @@ V2 — pause repas et fatigue (désactivées par défaut : la V1 est inchangée)
                                 si aucun incident en attente n'est à moins de rayon_min de trajet,
                                 et si moins de part_max_site des équipes du site sont déjà en pause (décalage) ;
     - la règle d'amplitude tient compte de la fatigue (durée attendue = nominal × facteur de fatigue actuel).
+
+V2 — rotation des équipes (relève, désactivée par défaut) :
+    - sans rotation, les 63 équipes démarrent à H0, atteignent leurs 12h ensemble et se reposent toutes en même
+      temps (trou de couverture) ; avec rotation, les équipes de chaque site sont réparties en `groupes` ;
+      le groupe g prend son service à H0 + g × decalage_min (avant : « astreinte », disponible pour personne).
 """
 from __future__ import annotations
 
@@ -73,6 +78,22 @@ _PRIO = {"FIN_CHANTIER": 0, "ARRIVEE": 1, "FIN_RETOUR": 2, "FIN_REPOS": 3, "FIN_
 PAUSE_DEFAUT = {"actif": False, "mode": "fixe", "duree_min": 45, "seuil_min": 240,
                 "seuil_opportuniste_min": 180, "seuil_force_min": 360, "rayon_min": 30, "part_max_site": 0.5}
 FATIGUE_DEFAUT = {"actif": False, "seuil_h": 4.0, "pente_par_h": 0.05, "max": 1.5}
+ROTATION_DEFAUT = {"actif": False, "groupes": 2, "decalage_min": 240}
+
+
+def groupes_rotation(equipes, params: dict) -> dict[str, int]:
+    """Groupe de relève de chaque équipe : alternance au sein de chaque site (E1 → 0, E2 → 1, E3 → 0, …)."""
+    r = params.get("rotation") or {}
+    if not r.get("actif") or int(r.get("groupes", 1)) <= 1:
+        return {e.id_equipe: 0 for e in equipes}
+    n = int(r["groupes"])
+    rang: dict[str, int] = {}
+    out = {}
+    for e in sorted(equipes, key=lambda q: q.id_equipe):
+        k = rang.get(e.id_site, 0)
+        rang[e.id_site] = k + 1
+        out[e.id_equipe] = k % n
+    return out
 
 
 def facteur_fatigue(travail_min: float, params: dict) -> float:
@@ -122,9 +143,10 @@ def parametres_simulation(cfg: dict | None = None, **surcharges) -> dict:
         "seed": int(cfg.get("seed", 42)),
         "pause": {**PAUSE_DEFAUT, **cfg.get("pause", {})},          # V2
         "fatigue": {**FATIGUE_DEFAUT, **cfg.get("fatigue", {})},    # V2
+        "rotation": {**ROTATION_DEFAUT, **cfg.get("rotation", {})},  # V2
     }
     for k, v in surcharges.items():
-        if k in ("monte_carlo", "pause", "fatigue") and isinstance(v, dict):
+        if k in ("monte_carlo", "pause", "fatigue", "rotation") and isinstance(v, dict):
             p[k] = {**p[k], **v}
         else:
             p[k] = v
@@ -469,8 +491,17 @@ class Simulateur:
         for inc in self.incidents.values():
             inc.etat = EtatIncident.NON_APPARU
             self._pousser(inc.t_apparition, "APPARITION", inc.id_incident)
+        groupes = groupes_rotation(list(self.equipes.values()), self.params)
+        decalage = int((self.params.get("rotation") or {}).get("decalage_min", 240))
         for eq in self.equipes.values():
-            self._nouvelle_amplitude(eq, eq.t_debut_service)
+            prise = eq.t_debut_service + groupes[eq.id_equipe] * decalage
+            if prise > eq.t_debut_service:                  # V2 : relève — l'équipe est d'astreinte jusqu'à `prise`
+                eq.etat = EtatEquipe.REPOS
+                eq.t_libre = prise
+                self._ouvrir(eq, "astreinte", eq.t_debut_service, prise, None, (eq.lat, eq.lon), (eq.lat, eq.lon))
+                self._pousser(prise, "FIN_REPOS", eq.id_equipe)
+            else:
+                self._nouvelle_amplitude(eq, eq.t_debut_service)
         self._indispo_fin: dict[int, int | None] = {}
         for d in self.indispos:
             if d.id_equipe not in self.equipes:
@@ -553,7 +584,7 @@ def construire_serie(df_inc: pd.DataFrame, df_act: pd.DataFrame, nb_equipes: int
         en_attente = int(((app <= t) & (aff > t)).sum())
         actifs = df_act[(df_act["t_debut"] <= t) & (df_act["t_fin"] > t)]
         occupees = int(actifs["type"].isin(["trajet", "chantier"]).sum())
-        repos = int(actifs["type"].isin(["retour", "repos", "pause"]).sum())
+        repos = int(actifs["type"].isin(["retour", "repos", "pause", "astreinte"]).sum())
         hs = int((actifs["type"] == "hors_service").sum())
         lignes.append({"t": int(t), "clients_coupes": int(sum(vus.values())), "incidents_attente": en_attente,
                        "equipes_occupees": occupees, "equipes_repos": repos, "equipes_hs": hs,

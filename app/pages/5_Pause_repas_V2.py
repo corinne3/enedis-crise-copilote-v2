@@ -16,12 +16,12 @@ from crise.benchmark import resoudre_strategie
 from crise.config import charger_config, chemin_projet
 from crise.kpi import calculer_kpi
 from crise.models import lister_crises
-from crise.pause_analyse import MODES, params_mode
+from crise.pause_analyse import MODES, ROTATIONS, params_mode
 from crise.simulateur import simuler_crise
 
 logging.getLogger("crise.simulateur").setLevel(logging.ERROR)
 st.set_page_config(page_title="V2 — Pause repas", layout="wide")
-st.title("V2 — Pause repas et fatigue des équipes")
+st.title("V2 — Pause repas, fatigue et relève des équipes")
 st.caption("Hypothèse : au-delà de 4h de travail sans pause, chaque heure allonge les dépannages. "
            "La pause (45 min, sur place, jamais pendant un chantier) remet le compteur à zéro. "
            "Le Code du travail impose déjà une pause après 6h de travail effectif : la V1 ne la modélisait pas.")
@@ -33,18 +33,26 @@ with st.sidebar:
     strategie = st.selectbox("Stratégie", ["WSPT", "R2", "R1"])
     pente = st.slider("Perte de rendement par heure au-delà de 4h (%)", 0, 15, 5) / 100
     duree_pause = st.slider("Durée de la pause (min)", 20, 60, 45, 5)
+    rotation = st.selectbox("Relève des équipes", list(ROTATIONS), index=1,
+                            help="Sans relève, toutes les équipes démarrent à H0 et se reposent en même temps.")
 
 
 @st.cache_data(show_spinner=False)
-def simuler(crise: str, strategie: str, mode: str, pente: float, duree: int):
-    p = params_mode(mode, pente)
+def simuler(crise: str, strategie: str, mode: str, pente: float, duree: int, rotation: str = "aucune"):
+    p = params_mode(mode, pente, rotation)
     p["pause"] = {**p["pause"], "duree_min": duree}
     res = simuler_crise(crise, resoudre_strategie(strategie)(), p)
     return res, calculer_kpi(res)
 
 
 with st.spinner("Simulation des 3 modes…"):
-    resultats = {m: simuler(crise, strategie, m, pente, duree_pause) for m in MODES}
+    resultats = {m: simuler(crise, strategie, m, pente, duree_pause, rotation) for m in MODES}
+    v1 = simuler(crise, strategie, "sans_pause", 0.0, duree_pause, "aucune")[1]   # V1 : ni pause, ni relève
+
+st.markdown(f"**Référence V1** (sans pause, sans relève, sans fatigue) : "
+            f"{v1['clients_heures']:,.0f} clients·heures · attente max sensible {v1['attente_max_sensible_h']:.1f} h · "
+            f"**{v1['heures_sans_equipe_active']:.1f} h sans aucune équipe au travail** alors que des incidents "
+            f"attendent.".replace(",", " "))
 
 ref = resultats["sans_pause"][1]["clients_heures"]
 cols = st.columns(3)
@@ -58,8 +66,11 @@ for col, m in zip(cols, MODES, strict=True):
         st.metric("Pauses prises", k["nb_pauses"])
         st.metric("Rendement moyen des chantiers", f"{100 / k['fatigue_moyenne']:.0f} %",
                   help="100 % = sans fatigue")
-        st.caption(f"Attente max sensible {k['attente_max_sensible_h']:.1f} h · "
-                   f"dépassements d'amplitude : {k['depassements_amplitude']}")
+        st.metric("Heures sans aucune équipe au travail", f"{k['heures_sans_equipe_active']:.1f} h",
+                  f"{k['heures_sans_equipe_active'] - v1['heures_sans_equipe_active']:+.1f} h vs V1",
+                  delta_color="inverse")
+        st.caption(f"Attente max sensible {k['attente_max_sensible_h']:.1f} h · fin de crise "
+                   f"{k['fin_crise_h']:.0f} h · dépassements d'amplitude : {k['depassements_amplitude']}")
 
 st.subheader("Clients coupés au fil de la crise")
 fig = go.Figure()
@@ -77,6 +88,7 @@ act["debut"] = pd.Timestamp("2026-01-01") + pd.to_timedelta(act["t_debut"], unit
 act["fin"] = pd.Timestamp("2026-01-01") + pd.to_timedelta(act["t_fin"], unit="m")
 fig2 = px.timeline(act, x_start="debut", x_end="fin", y="id_equipe", color="type", height=900,
                    color_discrete_map={"trajet": "#f2a541", "chantier": "#d1495b", "pause": "#2a9d8f",
+                                       "astreinte": "#cdb4db",
                                        "retour": "#9db4c0", "repos": "#5c6b73", "hors_service": "#222222"})
 fig2.update_yaxes(autorange="reversed", title=None)
 fig2.update_layout(margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h"))
@@ -100,3 +112,16 @@ if fichier.exists():
                "aux clients ; en dessous : elle coûte.")
 else:
     st.info("Lancer `python -m crise.pause_analyse` pour calculer la courbe de sensibilité.")
+
+st.subheader("Relève des équipes : comparaison des organisations")
+fichier_rot = chemin_projet(charger_config()["chemins"]["outputs"]) / "rotation_comparaison.csv"
+if fichier_rot.exists():
+    rot = pd.read_csv(fichier_rot)
+    cols = {"clients_heures": "Clients·heures", "attente_max_sensible_h": "Attente max sensible (h)",
+            "heures_sans_equipe_active": "Heures sans équipe active", "fin_crise_h": "Fin de crise (h)"}
+    tab = rot.groupby("rotation", sort=False)[list(cols)].mean().round(1).rename(columns=cols)
+    st.dataframe(tab, use_container_width=True)
+    st.caption(f"Moyenne sur {rot['crise'].nunique()} crises, pause fixe, fatigue 5 %/h. Plus de groupes = "
+               "meilleure couverture de la nuit, mais moins d'équipes au pic du début : arbitrage du responsable.")
+else:
+    st.info("Lancer `python -m crise.pause_analyse` pour comparer les organisations de relève.")

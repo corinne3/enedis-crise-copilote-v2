@@ -44,7 +44,7 @@ def depassements_amplitude(res: SimResult) -> int:
     for _, g in act.groupby("id_equipe"):
         debut_service = 0
         for r in g.itertuples():
-            if r.type in ("repos", "hors_service"):
+            if r.type in ("repos", "hors_service", "astreinte"):   # une nouvelle amplitude commence après
                 debut_service = r.t_fin
             elif r.type in ("trajet", "chantier") and r.t_fin - debut_service > amplitude:
                 n += 1
@@ -57,7 +57,7 @@ def travail_max_sans_pause_h(res: SimResult) -> float:
     for _, g in res.activites.sort_values(["id_equipe", "t_debut"]).groupby("id_equipe"):
         cumul = 0
         for r in g.itertuples():
-            if r.type in ("pause", "repos", "hors_service"):
+            if r.type in ("pause", "repos", "hors_service", "astreinte"):
                 cumul = 0
             elif r.type in ("trajet", "chantier"):
                 cumul += r.t_fin - r.t_debut
@@ -113,6 +113,9 @@ def calculer_kpi(res: SimResult) -> dict:
         "nb_pauses": int(res.metadata.get("nb_pauses", 0)),                       # V2
         "fatigue_moyenne": float(res.metadata.get("fatigue_moyenne", 1.0)),       # V2
         "travail_max_sans_pause_h": travail_max_sans_pause_h(res),                # V2
+        "heures_sans_equipe_active": float(                                      # V2 : trou de couverture
+            ((serie["equipes_occupees"] == 0) & (serie["incidents_attente"] > 0)).sum()
+            * int(res.metadata.get("params", {}).get("pas_instantane_min", 30)) / 60),
         "nb_incidents": int(len(inc)),
     }
 
