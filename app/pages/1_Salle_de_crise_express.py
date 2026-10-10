@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
+from streamlit_folium import st_folium
 
 from crise.benchmark import resoudre_strategie, resumer
+from crise.carte import creer_carte_folium
 from crise.config import charger_config, chemin_projet
 from crise.copilote.templates import fiche_arbitrage, point_situation
 from crise.instant import equipes_a, incidents_a, ligne_serie
@@ -41,8 +44,17 @@ for code in ("R1", "R2", "WSPT", "WSPTX"):
         pass
 
 with st.sidebar:
-    crises = lister_crises()
-    crise = st.selectbox("Crise", crises, index=crises.index("CRISE_027") if "CRISE_027" in crises else 0)
+    try:
+        crises_reelles = lister_crises()
+    except Exception:
+        crises_reelles = []
+    crises = ["CRISE_FACTICE (T4.1)"] + crises_reelles
+    idx_defaut = (
+        crises.index("CRISE_024")
+        if "CRISE_024" in crises
+        else (crises.index("CRISE_027") if "CRISE_027" in crises else 0)
+    )
+    crise = st.selectbox("Crise", crises, index=idx_defaut)
     choix = st.multiselect("Stratégies à comparer", disponibles,
                            default=[c for c in disponibles if c != "WSPTX"] or disponibles,
                            format_func=lambda c: NOMS.get(c, c))
@@ -51,7 +63,7 @@ with st.sidebar:
     beta = st.slider("Poids de l'attente β (par heure)", 0.0, 0.5, 0.1, 0.05)
     st.subheader("Stress tests")
     routes_coupees = st.checkbox("Routes coupées en montagne (vitesse ÷ 3)")
-    peu_equipes = st.slider("Nombre d'équipes", 10, 63, 63)
+    peu_equipes = st.slider("Nombre d'équipes", 6 if "FACTICE" in crise else 10, 63, 6 if "FACTICE" in crise else 63)
     hs = st.slider("% d'équipes hors service à H+3", 0, 50, 0, 10)
 
 
@@ -63,6 +75,19 @@ def simuler(crise: str, code: str, alpha: float, beta: float, routes: bool, nb_e
     cfg = charger_config()
     p = parametres_simulation(cfg, alpha_sensible=alpha, beta_attente_par_h=beta)
     trajet = faire_trajet_min(cfg, zones=[ZONE_MONTAGNE] if routes else ())
+
+    if "FACTICE" in crise:
+        from crise.factice import generer_sim_result_factice
+
+        res = generer_sim_result_factice(
+            n_incidents=30,
+            n_equipes=min(nb_eq, 6),
+            seed=42,
+            policy=resoudre_strategie(code)(),
+            params=p,
+        )
+        return res, calculer_kpi(res)
+
     scenario = {"nb_equipes_max": nb_eq} if nb_eq < 63 else None
     options = {"interdites": set(interdites), "forcees": dict(forcees)}
     if hs_pct:
@@ -73,6 +98,7 @@ def simuler(crise: str, code: str, alpha: float, beta: float, routes: bool, nb_e
         options["indisponibilites"] = [Indisponibilite(e.id_equipe, 180) for e in eqs[::max(1, len(eqs) // n)][:n]]
     res = simuler_crise(crise, resoudre_strategie(code)(), p, scenario=scenario, trajet_min=trajet, **options)
     return res, calculer_kpi(res)
+
 
 
 if not choix:
@@ -136,26 +162,79 @@ st.plotly_chart(fig2, use_container_width=True)
 # --------------------------------------------------------------------------- carte animée (T4.2)
 st.subheader("Carte de la crise à l'instant t")
 fin_h = float(res.serie["t"].max() / 60)
-t_h = st.slider("Heure depuis le début de la crise", 0.0, fin_h, min(6.0, fin_h), 0.5)
+
+# Contrôles temporels et animation (T4.2 : curseur pas 30 min + bouton lecture)
+if "anim_t_h" not in st.session_state:
+    st.session_state.anim_t_h = min(6.0, fin_h)
+if "is_playing" not in st.session_state:
+    st.session_state.is_playing = False
+
+col_slide, col_btn_play, col_btn_reset = st.columns([6, 1.2, 1.2])
+
+with col_btn_play:
+    if st.button("⏸ Pause" if st.session_state.is_playing else "▶ Lecture", use_container_width=True):
+        st.session_state.is_playing = not st.session_state.is_playing
+        st.rerun()
+
+with col_btn_reset:
+    if st.button("⏮ Début", use_container_width=True):
+        st.session_state.anim_t_h = 0.0
+        st.session_state.is_playing = False
+        st.rerun()
+
+if st.session_state.is_playing:
+    if round(st.session_state.anim_t_h + 0.5, 1) <= fin_h:
+        st.session_state.anim_t_h = round(st.session_state.anim_t_h + 0.5, 1)
+        time.sleep(0.3)
+        st.rerun()
+    else:
+        st.session_state.is_playing = False
+
+with col_slide:
+    t_h = st.slider(
+        "Heure depuis le début de la crise",
+        0.0,
+        fin_h,
+        float(st.session_state.anim_t_h),
+        0.5,
+        key="slider_t_h",
+    )
+    st.session_state.anim_t_h = t_h
+
 t_min = t_h * 60
 inc_t = incidents_a(res, t_min)
 eq_t = equipes_a(res, t_min)
-COUL = {"à venir": [180, 180, 180, 60], "en attente": [214, 40, 40, 220],
-        "en intervention": [242, 165, 65, 230], "rétabli": [42, 157, 143, 140]}
-inc_t["couleur"] = inc_t["etat"].map(COUL)
-inc_t["rayon"] = 400 + 25 * inc_t["nb_clients"]
-inc_t["contour"] = inc_t["sensible"].map(lambda v: [128, 0, 200, 255] if v else [0, 0, 0, 0])
-eq_t["couleur"] = eq_t["activite"].map({"trajet": [30, 90, 200, 255], "chantier": [30, 90, 200, 255],
-                                        "retour": [120, 140, 160, 255], "repos": [90, 90, 90, 255],
-                                        "hors_service": [0, 0, 0, 255]}).apply(
-    lambda c: c if isinstance(c, list) else [30, 160, 255, 255])
+
+# Indicateurs instantanés à l'instant t (T4.3)
 c1, c2, c3, c4 = st.columns(4)
 for col_, etat in zip((c1, c2, c3, c4), ("en attente", "en intervention", "rétabli", "à venir"), strict=True):
     n = inc_t["etat"].eq(etat)
     col_.metric(etat.capitalize(), f"{int(n.sum())} incidents", f"{int(inc_t.loc[n, 'nb_clients'].sum())} clients",
                 delta_color="off")
-sans_fond = st.checkbox("Vue sans fond de carte (si la carte reste grise)")
-if sans_fond:
+
+mode_carte = st.radio(
+    "Mode d'affichage cartographique :",
+    ["🗺️ Carte interactive Folium (Leaflet)", "🌐 Vue 3D Pydeck", "📊 Vue Plotly (sans fond)"],
+    index=0,
+    horizontal=True,
+)
+
+# Récupération des sites de référence
+sites_refs = None
+if "FACTICE" in crise:
+    from crise.factice import creer_sites_factices
+    sites_refs = creer_sites_factices()
+else:
+    try:
+        from crise.models import charger_scenario
+        sites_refs, _, _ = charger_scenario(crise)
+    except Exception:
+        pass
+
+if mode_carte == "🗺️ Carte interactive Folium (Leaflet)":
+    carte_folium = creer_carte_folium(inc_t, eq_t, sites=sites_refs)
+    st_folium(carte_folium, width=None, height=520, returned_objects=[])
+elif mode_carte == "📊 Vue Plotly (sans fond)":
     fig3 = px.scatter(inc_t[inc_t["etat"] != "à venir"], x="lon", y="lat", color="etat", size="nb_clients",
                       size_max=14, hover_name="commune", height=520,
                       color_discrete_map={"en attente": "#d62828", "en intervention": "#f2a541", "rétabli": "#2a9d8f"})
@@ -165,6 +244,15 @@ if sans_fond:
     fig3.update_layout(margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig3, use_container_width=True)
 else:
+    COUL = {"à venir": [180, 180, 180, 60], "en attente": [214, 40, 40, 220],
+            "en intervention": [242, 165, 65, 230], "rétabli": [42, 157, 143, 140]}
+    inc_t["couleur"] = inc_t["etat"].map(COUL)
+    inc_t["rayon"] = 400 + 25 * inc_t["nb_clients"]
+    inc_t["contour"] = inc_t["sensible"].map(lambda v: [128, 0, 200, 255] if v else [0, 0, 0, 0])
+    eq_t["couleur"] = eq_t["activite"].map({"trajet": [30, 90, 200, 255], "chantier": [30, 90, 200, 255],
+                                            "retour": [120, 140, 160, 255], "repos": [90, 90, 90, 255],
+                                            "hors_service": [0, 0, 0, 255]}).apply(
+        lambda c: c if isinstance(c, list) else [30, 160, 255, 255])
     trajets = eq_t[eq_t["activite"] == "trajet"]
     couches = [
         pdk.Layer("ScatterplotLayer", inc_t, get_position="[lon, lat]", get_fill_color="couleur",
@@ -178,6 +266,7 @@ else:
     st.pydeck_chart(pdk.Deck(
         layers=couches, initial_view_state=pdk.ViewState(latitude=43.3, longitude=1.1, zoom=7.2),
         tooltip={"text": "{commune}{id_equipe}\n{etat}{activite}\n{nb_clients} clients"}, height=520))
+
 st.caption("Rouge = en attente · orange = en intervention · vert = rétabli · contour violet = client sensible · "
            "bleu = équipes (traits = trajets en cours). Taille = nombre de clients.")
 st.info(point_situation(int(t_min), ligne_serie(res, t_min),

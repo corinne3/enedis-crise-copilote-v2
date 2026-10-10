@@ -12,6 +12,8 @@ folium>=0.16
 streamlit-folium>=0.20
 plotly>=5.20
 ollama>=0.3
+imageio>=2.30
+imageio-ffmpeg>=0.4
 pytest>=8
 ruff>=0.4
 # installe le paquet local "crise" (src/crise) en mode éditable

@@ -18,6 +18,7 @@ from crise.models import (
     EtatSimulation,
     Incident,
     Poste,
+    SimResult,
     Site,
 )
 from crise.trajet import calculer_trajet_min
@@ -515,3 +516,158 @@ def resoudre_affectation_hongrois(
             )
 
     return affectations
+
+
+def creer_scenario_factice(
+    n_incidents: int = 30,
+    n_equipes: int = 6,
+    seed: int = 42,
+) -> tuple[list[Site], list[Equipe], list[Incident]]:
+    """Génère un scénario factice conforme à T4.1 (30 incidents, 6 équipes).
+
+    Les positions couvrent les 3 départements du défi (Ariège 09, Haute-Garonne 31, Gers 32).
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+
+    sites = [
+        Site(id_site="SITE_TOULOUSE", commune="Toulouse", lat=43.604, lon=1.443, nb_equipes=2),
+        Site(id_site="SITE_MURET", commune="Muret", lat=43.460, lon=1.326, nb_equipes=2),
+        Site(id_site="SITE_FOIX", commune="Foix", lat=42.964, lon=1.606, nb_equipes=2),
+    ]
+
+    equipes: list[Equipe] = []
+    for k in range(n_equipes):
+        site = sites[k % len(sites)]
+        num = (k // len(sites)) + 1
+        equipes.append(
+            Equipe(
+                id_equipe=f"{site.id_site}_E{num}",
+                id_site=site.id_site,
+                lat=site.lat,
+                lon=site.lon,
+                etat=EtatEquipe.DISPONIBLE,
+                t_debut_service=0,
+                t_libre=0,
+            )
+        )
+
+    communes_ref = [
+        ("Toulouse", "31", 43.604, 1.443),
+        ("Muret", "31", 43.460, 1.326),
+        ("Saint-Gaudens", "31", 43.108, 0.723),
+        ("Colomiers", "31", 43.614, 1.334),
+        ("Foix", "09", 42.964, 1.606),
+        ("Pamiers", "09", 43.116, 1.611),
+        ("Tarascon-sur-Ariège", "09", 42.846, 1.598),
+        ("Ax-les-Thermes", "09", 42.721, 1.815),
+        ("Auch", "32", 43.646, 0.587),
+        ("Condom", "32", 43.957, 0.372),
+        ("Mirande", "32", 43.515, 0.404),
+    ]
+
+    causes = ["tempête", "chute d'arbre", "foudre", "inondation", "neige"]
+
+    incidents: list[Incident] = []
+    for i in range(n_incidents):
+        com, dep, base_lat, base_lon = communes_ref[i % len(communes_ref)]
+        lat = round(float(base_lat + rng.uniform(-0.10, 0.10)), 4)
+        lon = round(float(base_lon + rng.uniform(-0.12, 0.12)), 4)
+        t_app = int(rng.integers(0, 360))
+        duree = int(rng.choice([120, 240, 480]))
+        nb_clients = int(rng.integers(15, 150))
+        sensible = bool(rng.random() < 0.20)
+        cause = str(rng.choice(causes))
+
+        incidents.append(
+            Incident(
+                id_incident=f"INC_FACTICE_{i+1:03d}",
+                id_poste=f"POSTE_FACTICE_{i+1:03d}",
+                t_apparition=t_app,
+                duree_nominale=duree,
+                duree_reelle=duree,
+                cause=cause,
+                nb_clients=nb_clients,
+                sensible=sensible,
+                lat=lat,
+                lon=lon,
+                etat=EtatIncident.NON_APPARU,
+            )
+        )
+
+    incidents.sort(key=lambda x: (x.t_apparition, x.id_incident))
+    return sites, equipes, incidents
+
+
+def generer_sim_result_factice(
+    n_incidents: int = 30,
+    n_equipes: int = 6,
+    seed: int = 42,
+    policy=None,
+    params: dict | None = None,
+) -> SimResult:
+    """T4.1 — Génère un SimResult factice complet à partir des contrats §4.4.
+
+    Génère 30 incidents et 6 équipes au hasard sur la zone, simule la crise avec
+    la stratégie spécifiée (WSPTHongroisPolicy par défaut), et retourne le SimResult
+    avec les 4 tables renseignées (incidents, activites, decisions, serie)
+    et les colonnes géographiques (commune, departement).
+    """
+    from crise.policies.wspt_hongrois import WSPTHongroisPolicy
+    from crise.simulateur import parametres_simulation, simuler
+
+    sites, equipes, incidents = creer_scenario_factice(
+        n_incidents=n_incidents,
+        n_equipes=n_equipes,
+        seed=seed,
+    )
+
+    pol = policy if policy is not None else WSPTHongroisPolicy()
+    if params is not None and "amplitude_max_min" in params:
+        p = dict(params)
+        p["seed"] = seed
+    elif params is not None and "travail" in params:
+        p = parametres_simulation(params, seed=seed)
+    else:
+        p = parametres_simulation(None, seed=seed, **(params or {}))
+
+    communes_ref = [
+        ("Toulouse", "31"),
+        ("Muret", "31"),
+        ("Saint-Gaudens", "31"),
+        ("Colomiers", "31"),
+        ("Foix", "09"),
+        ("Pamiers", "09"),
+        ("Tarascon-sur-Ariège", "09"),
+        ("Ax-les-Thermes", "09"),
+        ("Auch", "32"),
+        ("Condom", "32"),
+        ("Mirande", "32"),
+    ]
+
+    geo_map = {
+        inc.id_incident: communes_ref[i % len(communes_ref)]
+        for i, inc in enumerate(incidents)
+    }
+
+    meta = {
+        "crise": "CRISE_FACTICE",
+        "strategie": getattr(pol, "nom", str(pol)),
+        "seed": seed,
+        "params": p,
+    }
+
+    res = simuler(sites, equipes, incidents, pol, params=p, meta=meta)
+
+    # Compléter commune et département si absents ou vides
+    if "commune" not in res.incidents.columns or res.incidents["commune"].isna().any():
+        res.incidents["commune"] = res.incidents["id_incident"].map(
+            lambda x: geo_map.get(x, ("Toulouse", "31"))[0]
+        )
+    if "departement" not in res.incidents.columns or res.incidents["departement"].isna().any():
+        res.incidents["departement"] = res.incidents["id_incident"].map(
+            lambda x: geo_map.get(x, ("Toulouse", "31"))[1]
+        )
+
+    return res
