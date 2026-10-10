@@ -11,6 +11,7 @@ from pathlib import Path
 
 from crise.config import charger_config
 from crise.models import (
+    Affectation,
     Equipe,
     EtatEquipe,
     EtatIncident,
@@ -65,9 +66,13 @@ def calculer_score_wspt(
 
     Renvoie -inf si l'affectation est infaisable :
     - équipe non DISPONIBLE
+    - incident non EN_ATTENTE ou non encore apparu (t_apparition > t)
     - ou trajet + durée > amplitude restante
     """
     if equipe.etat != EtatEquipe.DISPONIBLE:
+        return -float("inf")
+
+    if incident.etat != EtatIncident.EN_ATTENTE or incident.t_apparition > t:
         return -float("inf")
 
     p = dict(PARAMETRES_DEFAUT)
@@ -425,3 +430,88 @@ def creer_etat_simulation_equipes_indisponibles(
         toutes_equipes=deepcopy(equipes),
         params=p,
     )
+
+
+def resoudre_affectation_hongrois(
+    etat: EtatSimulation,
+    trajet_func=calculer_trajet_min,
+) -> list[Affectation]:
+    """Résout l'affectation optimale globale équipes <-> incidents par l'algorithme hongrois (§5.3).
+
+    Gère de manière robuste :
+    - Les matrices rectangulaires (plus d'équipes que d'incidents ou inversement)
+    - Les équipes ou incidents infaisables (-inf) sans lever ValueError de scipy
+    - Ne produit aucune affectation pour les couples infaisables
+    """
+    equipes = [eq for eq in etat.equipes_disponibles if eq.etat == EtatEquipe.DISPONIBLE]
+    incidents = [
+        inc for inc in etat.incidents_en_attente
+        if inc.etat == EtatIncident.EN_ATTENTE and inc.t_apparition <= etat.t
+    ]
+
+    if not equipes or not incidents:
+        return []
+
+    try:
+        import numpy as np
+        from scipy.optimize import linear_sum_assignment
+    except ImportError:
+        affectations = []
+        inc_restants = list(incidents)
+        for eq in equipes:
+            meilleur_score = -float("inf")
+            meilleur_inc = None
+            for inc in inc_restants:
+                s = calculer_score_wspt(eq, inc, etat.t, trajet_func=trajet_func, params=etat.params)
+                if s > meilleur_score:
+                    meilleur_score = s
+                    meilleur_inc = inc
+            if meilleur_inc is not None and meilleur_score > -float("inf"):
+                affectations.append(
+                    Affectation(
+                        id_equipe=eq.id_equipe,
+                        id_incident=meilleur_inc.id_incident,
+                        explication={"score": meilleur_score},
+                    )
+                )
+                inc_restants.remove(meilleur_inc)
+        return affectations
+
+    n_eq = len(equipes)
+    n_inc = len(incidents)
+    S = np.zeros((n_eq, n_inc), dtype=float)
+
+    for i, eq in enumerate(equipes):
+        for j, inc in enumerate(incidents):
+            S[i, j] = calculer_score_wspt(eq, inc, etat.t, trajet_func=trajet_func, params=etat.params)
+
+    # linear_sum_assignment minimise le coût. Pour maximiser S, le coût est -S.
+    # Pour éviter ValueError: cost matrix is infeasible quand des lignes/colonnes sont -inf,
+    # on remplace -inf par une pénalité finie élevée (1e9).
+    cout = np.where(np.isneginf(S) | np.isnan(S), 1e9, -S)
+
+    row_ind, col_ind = linear_sum_assignment(cout)
+
+    affectations = []
+    for r, c in zip(row_ind, col_ind, strict=True):
+        score_val = float(S[r, c])
+        # Ne retenir que les affectations strictement faisables
+        if score_val > -float("inf") and not np.isnan(score_val) and cout[r, c] < 1e8:
+            eq = equipes[r]
+            inc = incidents[c]
+            trajet = trajet_func(eq.lat, eq.lon, inc.lat, inc.lon)
+            affectations.append(
+                Affectation(
+                    id_equipe=eq.id_equipe,
+                    id_incident=inc.id_incident,
+                    explication={
+                        "score": score_val,
+                        "trajet_min": trajet,
+                        "duree_min": inc.duree_nominale,
+                        "nb_clients": inc.nb_clients,
+                        "sensible": inc.sensible,
+                    },
+                )
+            )
+
+    return affectations

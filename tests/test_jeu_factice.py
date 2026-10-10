@@ -138,14 +138,9 @@ def test_jeu_factice_isolation():
 
 def test_import_crise_package_directly():
     """Vérifie que crise est importable directement sans préfixe src."""
-    import sys
-    from pathlib import Path
-    src_path = str(Path(__file__).resolve().parent.parent / "src")
-    if src_path not in sys.path:
-        sys.path.insert(0, src_path)
-
-    from crise.policies import Policy
+    from crise.policies import Policy, WSPTHongroisPolicy
     assert hasattr(Policy, "decide")
+    assert issubclass(WSPTHongroisPolicy, Policy)
 
 
 def test_postes_and_sites_factices():
@@ -191,7 +186,7 @@ def test_incidents_lifecycle_and_appearance():
 
 def test_trajet_min_calcul():
     """Vérifie le calcul conforme aux règles métier du §5.2."""
-    from crise.factice import calculer_trajet_min
+    from crise.trajet import calculer_trajet_min
 
     # Même point -> durée nulle
     assert calculer_trajet_min(43.604, 1.443, 43.604, 1.443) == pytest.approx(0.0)
@@ -372,6 +367,143 @@ def test_affectation_hongrois_sur_jeu_factice():
     assert affectations["SITE_MURET_E1"] == "INC_001"
     # Foix prend INC_005 (Tarascon hôpital, sensible, proximité immédiate en Ariège)
     assert affectations["SITE_FOIX_E1"] == "INC_005"
+
+
+def test_calculer_score_wspt_non_en_attente_or_futur():
+    """Vérifie que les incidents non EN_ATTENTE ou futurs sont strictement rejetés (-inf)."""
+    from copy import deepcopy
+
+    from crise.factice import calculer_score_wspt, creer_jeu_factice
+
+    equipes, incidents = creer_jeu_factice(t=60)
+    eq = equipes[0]
+    inc = deepcopy(incidents[0])
+
+    etats_invalides = (
+        EtatIncident.RESOLU,
+        EtatIncident.AFFECTE,
+        EtatIncident.EN_COURS,
+        EtatIncident.NON_APPARU,
+    )
+    for etat_invalide in etats_invalides:
+        inc.etat = etat_invalide
+        score = calculer_score_wspt(eq, inc, t=60)
+        assert score == -float("inf"), f"L'état {etat_invalide} doit donner un score de -inf"
+
+    # Incident futur (t_apparition > t)
+    inc.etat = EtatIncident.EN_ATTENTE
+    inc.t_apparition = 100
+    score_futur = calculer_score_wspt(eq, inc, t=60)
+    assert score_futur == -float("inf"), "Un incident futur (t_apparition > t) doit donner -inf"
+
+
+def test_calculer_trajet_min_multiplicateur_invalide():
+    """Vérifie que multiplicateur_zone <= 0 lève une ValueError explicite."""
+    from crise.trajet import calculer_trajet_min
+
+    with pytest.raises(ValueError, match="multiplicateur_zone doit être strictement positif"):
+        calculer_trajet_min(43.604, 1.443, 43.460, 1.326, multiplicateur_zone=0.0)
+
+    with pytest.raises(ValueError, match="multiplicateur_zone doit être strictement positif"):
+        calculer_trajet_min(43.604, 1.443, 43.460, 1.326, multiplicateur_zone=-1.5)
+
+
+def test_distance_haversine_km_proprietes():
+    """Vérifie les propriétés géométriques fondamentales de distance_haversine_km."""
+    from crise.trajet import distance_haversine_km
+
+    # Symétrie d(A, B) == d(B, A)
+    d_ab = distance_haversine_km(43.604, 1.443, 42.964, 1.606)
+    d_ba = distance_haversine_km(42.964, 1.606, 43.604, 1.443)
+    assert d_ab == pytest.approx(d_ba)
+    assert 71.0 <= d_ab <= 74.0
+
+    # Inégalité triangulaire d(A, C) <= d(A, B) + d(B, C)
+    lat_c, lon_c = 43.460, 1.326
+    d_ac = distance_haversine_km(43.604, 1.443, lat_c, lon_c)
+    d_cb = distance_haversine_km(lat_c, lon_c, 42.964, 1.606)
+    assert d_ab <= (d_ac + d_cb) + 1e-6
+
+
+def test_matrice_trajet_and_vectorisation():
+    """Vérifie la concordance entre matrice_trajet et la version vectorisée numpy (§5.2)."""
+    import numpy as np
+
+    from crise.factice import creer_equipes_factices, creer_incidents_factices
+    from crise.trajet import matrice_trajet, matrice_trajet_vectorisee
+
+    equipes = creer_equipes_factices()
+    incidents = creer_incidents_factices(t=60)
+
+    m_standard = matrice_trajet(equipes, incidents)
+    m_vectorisee = matrice_trajet_vectorisee(equipes, incidents)
+
+    assert isinstance(m_vectorisee, np.ndarray)
+    assert m_vectorisee.shape == (3, 6)
+    assert np.allclose(m_standard, m_vectorisee, atol=1e-5)
+
+    # Cas limites séquences vides
+    assert matrice_trajet([], incidents) == []
+    assert matrice_trajet_vectorisee([], incidents).shape == (0, 6)
+    assert matrice_trajet(equipes, []) == [[], [], []]
+    assert matrice_trajet_vectorisee(equipes, []).shape == (3, 0)
+
+
+def test_resoudre_affectation_hongrois_rectangulaire_et_faisabilite():
+    """Vérifie la robustesse de resoudre_affectation_hongrois sur matrices rectangulaires et infaisables."""
+    from crise.factice import (
+        creer_etat_simulation_amplitude_epuisee,
+        creer_etat_simulation_factice,
+        resoudre_affectation_hongrois,
+    )
+
+    # Cas 1 : Plus d'incidents que d'équipes (3 équipes, 6 incidents à t=60)
+    etat_rect = creer_etat_simulation_factice(t=60)
+    affs_rect = resoudre_affectation_hongrois(etat_rect)
+    assert len(affs_rect) == 3
+    equipes_assignees = {a.id_equipe for a in affs_rect}
+    assert len(equipes_assignees) == 3  # Chaque équipe a 1 incident distinct
+
+    # Cas 2 : Plus d'équipes que d'incidents (3 équipes, 1 incident en attente)
+    etat_mono = creer_etat_simulation_factice(t=60)
+    etat_mono.incidents_en_attente = [etat_mono.incidents_en_attente[0]]
+    affs_mono = resoudre_affectation_hongrois(etat_mono)
+    assert len(affs_mono) == 1
+    assert affs_mono[0].id_incident == "INC_001"
+
+    # Cas 3 : Une équipe avec amplitude épuisée (ne doit pas lever de ValueError dans linear_sum_assignment)
+    etat_mixte = creer_etat_simulation_factice(t=0)
+    # On épuise l'amplitude de l'équipe 0
+    etat_mixte.equipes_disponibles[0].t_debut_service = -720
+    etat_mixte.t = 0
+    affs_mixte = resoudre_affectation_hongrois(etat_mixte)
+    # L'équipe 0 ne doit pas être affectée
+    ids_assignees = {a.id_equipe for a in affs_mixte}
+    assert etat_mixte.equipes_disponibles[0].id_equipe not in ids_assignees
+
+    # Cas 4 : Toutes amplitudes épuisées -> 0 affectation sans crash
+    etat_epuise = creer_etat_simulation_amplitude_epuisee(t=720)
+    affs_epuise = resoudre_affectation_hongrois(etat_epuise)
+    assert affs_epuise == []
+
+
+def test_wspt_hongrois_policy_decide():
+    """Vérifie que WSPTHongroisPolicy implémente l'interface Policy et produit des Affectations valides."""
+    from crise.factice import creer_etat_simulation_factice
+    from crise.policies import WSPTHongroisPolicy
+    from crise.trajet import calculer_trajet_min
+
+    policy = WSPTHongroisPolicy()
+    assert policy.nom == "wspt_hongrois"
+
+    etat = creer_etat_simulation_factice(t=0)
+    affectations = policy.decide(etat, calculer_trajet_min)
+    assert len(affectations) == 3
+    for aff in affectations:
+        assert aff.id_equipe.startswith("SITE_")
+        assert aff.id_incident.startswith("INC_")
+        assert "score" in aff.explication
+
 
 
 
