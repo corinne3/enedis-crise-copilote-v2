@@ -45,8 +45,14 @@ def charger_benchmark(chemin_outputs: str | Path | None = None) -> tuple[pd.Data
             
     # Si le résumé n'existe pas mais kpi oui, le recalculer
     if df_resume.empty and not df_kpi.empty:
-        from crise.benchmark import resumer
-        df_resume = resumer(df_kpi).reset_index()
+        try:
+            from crise.benchmark import resumer
+
+            df_resume = resumer(df_kpi).reset_index()
+        except Exception:
+            num_cols = df_kpi.select_dtypes(include="number").columns.tolist()
+            if num_cols and "strategie" in df_kpi.columns:
+                df_resume = df_kpi.groupby("strategie")[num_cols].mean().reset_index()
         
     return df_kpi, df_resume
 
