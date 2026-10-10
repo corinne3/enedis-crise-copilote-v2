@@ -6,11 +6,38 @@ Voir docs/PLAN_EQUIPE_DEFI_ENEDIS.md.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from crise.models import Equipe, Incident
+
+
+@dataclass(frozen=True)
+class ZoneRalentie:
+    """Zone où les trajets sont ralentis (stress test « routes coupées », S1).
+
+    S'applique quand la DESTINATION est dans le rectangle. facteur=3 → vitesse divisée par 3.
+    """
+    lat_min: float
+    lat_max: float
+    lon_min: float
+    lon_max: float
+    facteur: float = 3.0
+    nom: str = ""
+
+    def contient(self, lat: float, lon: float) -> bool:
+        return self.lat_min <= lat <= self.lat_max and self.lon_min <= lon <= self.lon_max
+
+
+# Zone prête à l'emploi pour la démo : piémont / montagne pyrénéenne (Ariège, Comminges, Luchon)
+ZONE_MONTAGNE = ZoneRalentie(42.4, 43.05, -0.5, 2.4, facteur=3.0, nom="Montagne (lat < 43,05)")
+
+
+def facteur_zones(lat: float, lon: float, zones: Sequence[ZoneRalentie] = ()) -> float:
+    """Facteur de ralentissement à une destination (le plus fort si plusieurs zones se recouvrent)."""
+    return max((z.facteur for z in zones if z.contient(lat, lon)), default=1.0)
 
 
 def distance_haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -41,12 +68,14 @@ def calculer_trajet_min(
     vitesse_montagne_kmh: float = 35.0,
     lat_seuil_montagne: float = 43.05,
     multiplicateur_zone: float = 1.0,
+    zones: Sequence[ZoneRalentie] = (),
 ) -> float:
     """Calcule la durée de trajet routier en minutes selon les règles du §5.2.
 
     Si lat2 < lat_seuil_montagne, la destination est en montagne (35 km/h).
     Sinon, elle est en plaine (55 km/h).
     Le multiplicateur_zone permet d'appliquer un ralentissement (ex: routes coupées / stress).
+    zones : ralentissements locaux (ZoneRalentie), cumulés avec multiplicateur_zone.
     """
     if multiplicateur_zone <= 0:
         raise ValueError(f"multiplicateur_zone doit être strictement positif, reçu: {multiplicateur_zone}")
@@ -57,7 +86,8 @@ def calculer_trajet_min(
 
     d_route = d_vol * coef_detour
     vitesse_base = vitesse_montagne_kmh if lat2 < lat_seuil_montagne else vitesse_plaine_kmh
-    vitesse_effective = max(1.0, vitesse_base / multiplicateur_zone)
+    facteur = multiplicateur_zone * facteur_zones(lat2, lon2, zones)
+    vitesse_effective = max(1.0, vitesse_base / facteur)
     return (d_route / vitesse_effective) * 60.0
 
 
@@ -74,6 +104,7 @@ def matrice_trajet_vectorisee(
     vitesse_montagne_kmh: float = 35.0,
     lat_seuil_montagne: float = 43.05,
     multiplicateur_zone: float = 1.0,
+    zones: Sequence[ZoneRalentie] = (),
 ):
     """Calcul vectorisé numpy (§5.2) de la matrice des temps de trajet en minutes.
 
@@ -104,7 +135,8 @@ def matrice_trajet_vectorisee(
     d_route = d_vol * coef_detour
     lats_inc_deg = np.array([inc.lat for inc in incidents], dtype=float)[np.newaxis, :]
     vitesses_base = np.where(lats_inc_deg < lat_seuil_montagne, vitesse_montagne_kmh, vitesse_plaine_kmh)
-    vitesses_eff = np.maximum(1.0, vitesses_base / multiplicateur_zone)
+    facteurs = np.array([facteur_zones(inc.lat, inc.lon, zones) for inc in incidents], dtype=float)[np.newaxis, :]
+    vitesses_eff = np.maximum(1.0, vitesses_base / (multiplicateur_zone * facteurs))
 
     return (d_route / vitesses_eff) * 60.0
 
@@ -124,3 +156,38 @@ def matrice_trajet(
         [trajet_func(eq.lat, eq.lon, inc.lat, inc.lon) for inc in incidents]
         for eq in equipes
     ]
+
+
+def parametres_trajet(cfg: dict) -> dict:
+    """Extrait les paramètres de trajet de la config (config/default.yaml, section « trajet »)."""
+    t = cfg.get("trajet", cfg)
+    return {
+        "coef_detour": float(t["coef_detour"]),
+        "vitesse_plaine_kmh": float(t["vitesse_plaine_kmh"]),
+        "vitesse_montagne_kmh": float(t["vitesse_montagne_kmh"]),
+        "lat_seuil_montagne": float(t["lat_seuil_montagne"]),
+    }
+
+
+def faire_trajet_min(
+    cfg: dict | None = None,
+    multiplicateur_zone: float = 1.0,
+    zones: Sequence[ZoneRalentie] = (),
+) -> Callable[[float, float, float, float], float]:
+    """Fabrique la fonction trajet_min(lat1, lon1, lat2, lon2) passée à Policy.decide,
+    avec les paramètres de la config (et d'éventuels ralentissements pour les stress tests).
+
+    Exemple : trajet = faire_trajet_min(charger_config(), zones=[ZONE_MONTAGNE])
+    """
+    if cfg is None:
+        from crise.config import charger_config
+
+        cfg = charger_config()
+    p = parametres_trajet(cfg)
+    zones = tuple(zones)
+
+    def _trajet(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        return calculer_trajet_min(lat1, lon1, lat2, lon2, **p, multiplicateur_zone=multiplicateur_zone, zones=zones)
+
+    _trajet.parametres = {**p, "multiplicateur_zone": multiplicateur_zone, "zones": zones}
+    return _trajet
