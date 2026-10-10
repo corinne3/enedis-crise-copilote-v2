@@ -20,7 +20,7 @@ Tableau de suivi des lots et des tâches établi pour la coordination de l'équi
 - [x] **T1.1** : Squelette du dépôt, arborescence, config, requirements, CI
 - [ ] **T1.2** : `nettoyage.py` : lecture des 3 fichiers, corrections P1 à P7, jointure coupures ↔ postes, export parquet
 - [ ] **T1.3** : `models.py` : contrats d'interface §4 + `charger_scenario`
-- [ ] **T1.4** : `trajet.py` : calcul haversine, détour 1.3, vitesses plaine/montagne
+- [x] **T1.4** : `trajet.py` : calcul haversine, détour 1.3, vitesses plaine/montagne
 - [ ] **T1.5** : `simulateur.py` : file d'événements, boucle T1→T5, SimResult
 - [ ] **T1.6** : `baselines.py` : R1 (FCFS + plus proche) et R2 (plus de clients d'abord)
 - [ ] **T1.7** : Contraintes de travail : amplitude 12h, retour base, repos 11h, indisponibilité
