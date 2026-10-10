@@ -9,7 +9,7 @@ Tableau de suivi des lots et des tâches établi pour la coordination de l'équi
 | **Lot 1 — Données & simulateur** | P1 | En cours | H+2:00 (simulateur minimal & nettoyage) |
 | **Lot 2 — Optimisation & explicabilité** | P2 | En cours | H+2:00 (WSPT sur jeu factice) |
 | **Lot 3 — Évaluation, robustesse, prépositionnement** | P3 | En attente | H+3:30 (banc d'essai 100 crises) |
-| **Lot 4 — Interface Streamlit** | P4 | En cours | H+2:00 (carte animée sur factice) |
+| **Lot 4 — Interface Streamlit** | P4 | **T4.1–T4.3 complétées** | H+2:00 (carte animée & KPI sur factice) |
 | **Lot 5 — Copilote IA & Coordination** | P5 | **T5.1 complétée** | H+1:30 (T5.2 LLM & T5.3 templates) |
 
 ---
@@ -47,9 +47,9 @@ Tableau de suivi des lots et des tâches établi pour la coordination de l'équi
 - [ ] **T3.7** : Lancement banc d'essai complet + extraction graphiques et KPI clés
 
 ### LOT 4 — Interface Streamlit « Salle de crise » (P4)
-- [ ] **T4.1** : Squelette multi-pages, mise en page et générateur SimResult factice
-- [ ] **T4.2** : Carte Folium animée avec curseur temporel (pas de 30 min)
-- [ ] **T4.3** : Bandeau métriques KPI (`st.metric`)
+- [x] **T4.1** : Squelette multi-pages, mise en page et générateur SimResult factice
+- [x] **T4.2** : Carte Folium animée avec curseur temporel (pas de 30 min)
+- [x] **T4.3** : Bandeau métriques KPI (`st.metric`)
 - [ ] **T4.4** : Courbe des clients coupés dans le temps (R1 vs R2 vs WSPT)
 - [ ] **T4.5** : Diagramme de Gantt des équipes
 - [ ] **T4.6** : Tableau des décisions à t et panneau explicatif
