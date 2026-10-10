@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -122,6 +124,113 @@ COLONNES_SIMRESULT = {
 }
 
 
-def charger_scenario(numero_crise: str, params: dict | None = None):
-    """T1.3 (P1) — renvoie (sites, equipes, incidents) pour une crise, depuis data/clean/*.parquet."""
-    raise NotImplementedError("T1.3 — à implémenter par P1")
+def normaliser_numero_crise(numero_crise: str | int) -> str:
+    """27, "27", "crise_027" ou "CRISE_027" → "CRISE_027"."""
+    if isinstance(numero_crise, int):
+        return f"CRISE_{numero_crise:03d}"
+    s = str(numero_crise).strip().upper()
+    if s.isdigit():
+        return f"CRISE_{int(s):03d}"
+    if s.startswith("CRISE_") and s[6:].isdigit():
+        return f"CRISE_{int(s[6:]):03d}"
+    raise ValueError(f"numéro de crise invalide : {numero_crise!r} (attendu ex. 27 ou 'CRISE_027')")
+
+
+def _dossier_clean(clean_dir: str | Path | None) -> Path:
+    if clean_dir is not None:
+        return Path(clean_dir)
+    from crise.config import charger_config, chemin_projet
+
+    return chemin_projet(charger_config()["chemins"]["clean"])
+
+
+@lru_cache(maxsize=8)
+def _lire_tables(dossier: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Lit sites + incidents une seule fois par dossier (le banc d'essai appelle charger_scenario 100× et plus)."""
+    import pandas as pd
+
+    d = Path(dossier)
+    manquants = [f for f in ("sites.parquet", "incidents.parquet") if not (d / f).exists()]
+    if manquants:
+        raise FileNotFoundError(f"{manquants} absents de {d} — lancer d'abord : python -m crise.data.nettoyage")
+    return pd.read_parquet(d / "sites.parquet"), pd.read_parquet(d / "incidents.parquet")
+
+
+def lister_crises(clean_dir: str | Path | None = None) -> list[str]:
+    """Liste triée des numéros de crise disponibles (ex. ["CRISE_001", …, "CRISE_100"])."""
+    _, incidents = _lire_tables(str(_dossier_clean(clean_dir)))
+    return sorted(incidents["numero_crise"].unique().tolist())
+
+
+def creer_equipes(sites: list[Site], positions_initiales: dict[str, tuple[float, float]] | None = None) -> list[Equipe]:
+    """Une Equipe par unité de nb_equipes : SITE_04_E1, SITE_04_E2, …
+
+    positions_initiales (prépositionnement, T3.4/T1.8) : {id_equipe: (lat, lon)} ; les équipes absentes
+    du dict partent de leur site. Le site reste la base de rattachement (retour pour le repos).
+    """
+    positions_initiales = positions_initiales or {}
+    inconnues = set(positions_initiales) - {f"{s.id_site}_E{k}" for s in sites for k in range(1, s.nb_equipes + 1)}
+    if inconnues:
+        raise ValueError(f"positions_initiales : équipes inconnues {sorted(inconnues)[:5]}")
+    equipes = []
+    for s in sites:
+        for k in range(1, s.nb_equipes + 1):
+            id_eq = f"{s.id_site}_E{k}"
+            lat, lon = positions_initiales.get(id_eq, (s.lat, s.lon))
+            equipes.append(Equipe(id_equipe=id_eq, id_site=s.id_site, lat=float(lat), lon=float(lon)))
+    return equipes
+
+
+def charger_scenario(
+    numero_crise: str | int,
+    params: dict | None = None,
+    clean_dir: str | Path | None = None,
+) -> tuple[list[Site], list[Equipe], list[Incident]]:
+    """T1.3 — renvoie (sites, equipes, incidents) pour une crise, depuis data/clean/*.parquet.
+
+    - incidents triés par t_apparition, état NON_APPARU, duree_reelle = duree_nominale
+      (le Monte Carlo du simulateur pourra modifier duree_reelle, T1.7) ;
+    - t_apparition en minutes depuis le premier incident de la crise ;
+    - params (optionnel) :
+        "positions_initiales": {id_equipe: (lat, lon)}  → prépositionnement
+        "nb_equipes_max": int                           → stress test « peu d'équipes » (S5),
+                                                          on garde les premières équipes de chaque site
+                                                          à tour de rôle pour rester équilibré.
+    Les objets renvoyés sont NEUFS à chaque appel (le simulateur peut les modifier sans risque).
+    """
+    params = params or {}
+    crise = normaliser_numero_crise(numero_crise)
+    df_sites, df_inc = _lire_tables(str(_dossier_clean(clean_dir)))
+
+    sites = [
+        Site(id_site=r.id_site, commune=r.commune, lat=float(r.lat), lon=float(r.lon), nb_equipes=int(r.nb_equipes))
+        for r in df_sites.itertuples(index=False)
+    ]
+    equipes = creer_equipes(sites, params.get("positions_initiales"))
+
+    nb_max = params.get("nb_equipes_max")
+    if nb_max is not None:
+        # tour de rôle : E1 de chaque site, puis E2 de chaque site, …
+        ordre = sorted(equipes, key=lambda e: (int(e.id_equipe.rsplit("_E", 1)[1]), e.id_site))
+        garder = {e.id_equipe for e in ordre[: int(nb_max)]}
+        equipes = [e for e in equipes if e.id_equipe in garder]
+
+    sel = df_inc[df_inc["numero_crise"] == crise].sort_values(["t_apparition", "id_incident"])
+    if sel.empty:
+        raise ValueError(f"{crise} introuvable dans incidents.parquet")
+    incidents = [
+        Incident(
+            id_incident=r.id_incident,
+            id_poste=r.id_poste,
+            t_apparition=int(r.t_apparition),
+            duree_nominale=int(r.duree_min),
+            duree_reelle=int(r.duree_min),
+            cause=r.cause,
+            nb_clients=int(r.nb_clients),
+            sensible=bool(r.sensible),
+            lat=float(r.lat),
+            lon=float(r.lon),
+        )
+        for r in sel.itertuples(index=False)
+    ]
+    return sites, equipes, incidents
