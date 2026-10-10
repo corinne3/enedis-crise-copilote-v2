@@ -94,6 +94,7 @@ def _une_simulation(crise: int, nom_strat: str, cls: type[Policy], params: dict,
     from crise.simulateur import simuler_crise
 
     p = dict(params)
+    p.setdefault("expliquer", False)             # explications inutiles pour le banc d'essai (×10 plus rapide)
     if seed is not None:
         p["seed"] = seed
         p["monte_carlo"] = {**p.get("monte_carlo", {}), "actif": True}
