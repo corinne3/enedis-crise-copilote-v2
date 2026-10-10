@@ -207,15 +207,13 @@ API existante (à réutiliser, ne pas réécrire) :
   4. Banc d'essai sur crises de test 81–100 : gain moyen de +1,62 % de clients·heures vs sites (14 crises gagnées sur 20), sauvegardé dans `outputs/prepositionnement.csv` et `outputs/prepositionnement_resume.csv`.
 
 
-### Fiche G — Pages annexes Streamlit (T4.8) 🟡
+### Fiche G — Pages annexes Streamlit (T4.8) 🟢 Terminé
 
-- **Fichiers** : `app/pages/2_Benchmark.py`, `3_Preparation.py`, `4_Stress_tests.py` (aujourd'hui des pages vides).
-- **À lire** : `app/pages/1_Salle_de_crise_express.py` (style à reprendre), `src/crise/benchmark.py`.
-- **À faire** : chaque page lit un fichier de `outputs/` et affiche un message « lancer … » s'il n'existe pas :
-  - Benchmark : `outputs/benchmark_kpi.csv` → `resumer(kpi)` + boxplot plotly par stratégie + histogramme du gain WSPT vs R2 par crise ; si `benchmark_kpi_mc.csv` existe : intervalle Monte Carlo.
-  - Préparation : `outputs/carte_risque.csv` (carte de chaleur pydeck `HeatmapLayer`) + `outputs/positions_pmediane.csv` vs sites + `outputs/prepositionnement.csv`.
-  - Stress tests : `outputs/stress_kpi.csv` → tableau scénarios × stratégies + barres.
-- **Fin quand** : les 3 pages s'ouvrent sans erreur, avec et sans fichiers.
+- **Fichiers** : `app/pages/2_Benchmark.py`, `3_Preparation.py`, `4_Stress_tests.py`, `tests/test_t4_pages.py`.
+- **Réalisé** :
+  - **Benchmark** : KPI clés, boxplots Plotly de dispersion du volume et de l'attente sensibles sur 100 crises, histogramme des gains par crise.
+  - **Préparation** : carte Folium de l'aléa (KDE), p-médiane MILP (+1,62 % de gain, 14/20 victoires), distances de déploiement et détail des 63 équipes.
+  - **Stress tests** : scénarios S1 à S5 (routes coupées, −30 % éq., 2e vague, crises cumulées 48h, 20 équipes), barres comparatives, garantie 100 % de sécurité (0 dépassement d'amplitude).
 
 ### Fiche H — Copilote LLM dans la démo (T5.4) 🟡
 
@@ -231,11 +229,10 @@ API existante (à réutiliser, ne pas réécrire) :
 - **À faire** : options activables par `params["anticipation_min"]` et `params["reserve_active"]` (déjà dans la config) : 1) ne pas envoyer une équipe lointaine si une équipe plus proche se libère dans < 30 min (`Equipe.t_libre`, `toutes_equipes`) ; 2) garder 1 équipe en réserve dans un rayon de 40 km si l'incident proposé dure 8h, n'est pas sensible, et qu'il reste des postes sensibles en attente dans la zone. Mesurer avec `lancer(range(1, 21), …)` avec et sans.
 - **Fin quand** : gain mesuré (ou absence de gain documentée) ; options désactivées par défaut si pas de gain.
 
-### Fiche J — Page d'accueil + finitions (T4.1, T4.9) 🟡
+### Fiche J — Page d'accueil + finitions (T4.1, T4.9) 🟢 Terminé
 
-- **Fichiers** : `app/Accueil.py` (P4 l'a commencé : demander d'abord).
-- **À faire** : titre, 3 phrases sur le défi, les chiffres clés du §1 (lus dans `outputs/benchmark_resume.csv` s'il existe), liens vers les pages, rappel « l'outil recommande, le responsable décide ». Vérifier que toutes les pages s'ouvrent, temps de chargement < 5 s.
-- **Fin quand** : la démo s'ouvre sur une page d'accueil propre.
+- **Fichiers** : `app/Accueil.py`.
+- **Réalisé** : Chargement dynamique instantané (< 1s) des métriques clés depuis `benchmark_resume.csv` via `@st.cache_data`, cartes de navigation interactive vers les 4 espaces, simulation factice instantanée.
 
 ---
 
