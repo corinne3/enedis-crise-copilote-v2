@@ -292,6 +292,15 @@ class Simulateur:
                               toutes_equipes=list(self.equipes.values()), params=self.params)
 
     def _lancer(self, eq: Equipe, inc: Incident, t: int, explication: dict, origine: str) -> None:
+        analyse = {}
+        if self.params.get("expliquer", True):              # T2.5 : explication calculée pour toute stratégie
+            from crise.explication import expliquer
+
+            analyse = expliquer(
+                eq, inc, t, self.params, self.trajet_min,
+                [i for i in self.incidents.values() if i.etat is EtatIncident.EN_ATTENTE],
+                [e for e in self.equipes.values() if e.etat is EtatEquipe.DISPONIBLE],
+            )
         nominal = self.trajet_min(eq.lat, eq.lon, inc.lat, inc.lon)
         duree = self._trajet_reel(nominal)
         eq.etat = EtatEquipe.TRAJET
@@ -303,7 +312,8 @@ class Simulateur:
         self._ouvrir(eq, "trajet", t, t + duree, inc, (eq.lat, eq.lon), (inc.lat, inc.lon))
         self._pousser(t + duree, "ARRIVEE", eq.id_equipe)
         self.decisions.append({"t": t, "id_equipe": eq.id_equipe, "id_incident": inc.id_incident,
-                               "explication": json.dumps({"origine": origine, **(explication or {})},
+                               "explication": json.dumps({"origine": origine, **analyse,
+                                                          "detail_strategie": explication or {}},
                                                          ensure_ascii=False, default=str)})
 
     def _valider(self, a: Affectation, t: int, libres: dict, attente: dict) -> str | None:
