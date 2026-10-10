@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Données (ne pas versionner les fichiers fournis ni les fichiers générés)
+data/raw/*
+!data/raw/.gitkeep
+data/clean/*
+!data/clean/.gitkeep
+
+# Résultats générés (on versionne seulement les figures choisies pour le pitch)
+outputs/*
+!outputs/.gitkeep
+!outputs/pitch/
+
+# Cache du copilote
+.cache/
+
+# Éditeurs / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
