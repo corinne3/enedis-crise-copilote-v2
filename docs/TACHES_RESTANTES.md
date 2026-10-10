@@ -197,16 +197,15 @@ API existante (à réutiliser, ne pas réécrire) :
 - **Temps** : 16 couples × 80 crises ≈ 10 min de calcul ; commencer avec 20 crises si pressé.
 - **Fin quand** : CSV produit + valeurs choisies dans la config + chiffres test 81–100.
 
-### Fiche F — Carte de risque + prépositionnement p-médiane (T3.3, T3.4) 🟡
+### Fiche F — Carte de risque + prépositionnement p-médiane (T3.3, T3.4) 🟢 Terminé
 
-- **Fichiers** : `src/crise/prepositionnement.py` (vide aujourd'hui), `tests/test_prepositionnement.py`.
-- **À lire** : plan §5.6, `src/crise/models.py`, `src/crise/kpi.py`, `src/crise/benchmark.py`.
-- **À faire** :
-  1. `carte_risque(crises) -> DataFrame` : incidents des crises 1–80 (`data/clean/incidents.parquet`), poids = `nb_clients × (1 + 5·sensible)`, agrégés en 200 zones par `KMeans(n_clusters=200).fit(X, sample_weight=w)` → colonnes `lat, lon, poids`.
-  2. `positions_pmediane(zones, sites, n_equipes=63, n_avances=20, max_par_point=8) -> dict[id_equipe, (lat, lon)]` : candidats = 18 sites + 20 centres de zones à fort risque ; MILP OR-Tools (`pywraplp.Solver.CreateSolver("SCIP")`, limite 60 s) : `n_k` entiers, `x_dk ∈ [0,1]`, min Σ w_d·trajet_dk·x_dk, Σ_k x_dk = 1, Σ_d w_d x_dk ≤ capa·n_k (capa = Σw/63 × 1,2), Σ n_k = 63, n_k ≤ 8. Trajet = `faire_trajet_min(cfg)`. Affecter ensuite chaque équipe (`SITE_xx_Ek`) au point le plus proche de son site, en respectant n_k.
-  3. Référence : `positions_kmeans` (63 centres K-Means).
-  4. Évaluation sur **crises 81–100** : `lancer(list(range(81, 101)), {"WSPT": WSPTHongroisPolicy}, scenario={"positions_initiales": pos})` pour sites / K-Means / p-médiane → `outputs/prepositionnement.csv`. Sauver aussi `outputs/positions_pmediane.csv` et `outputs/carte_risque.csv` (pour la fiche G).
-- **Fin quand** : MILP résolu en < 60 s, 63 équipes placées, tableau des 3 variantes. Plan B si OR-Tools pose problème : glouton (ajouter une équipe là où elle réduit le plus Σ w·trajet).
+- **Fichiers** : `src/crise/prepositionnement.py`, `tests/test_prepositionnement.py`.
+- **Réalisé** :
+  1. `carte_risque` (K-Means pondéré 200 zones sur crises 1–80, poids $N \times (1 + 5 \cdot s)$) + export Folium HeatMap (`outputs/carte_chaleur.html`, `outputs/carte_risque.csv`).
+  2. MILP p-médiane capacitaire sous OR-Tools SCIP (38 candidats, capacité $\sum w / 63 \times 1.2$, $n_k \le 8$, $\sum n_k = 63$) + affectation optimale bipartite (`linear_sum_assignment`) des 63 équipes par proximité de site d'origine (`outputs/positions_pmediane.csv`).
+  3. Référence K-Means à 63 centres.
+  4. Banc d'essai sur crises de test 81–100 : gain moyen de +1,62 % de clients·heures vs sites (14 crises gagnées sur 20), sauvegardé dans `outputs/prepositionnement.csv` et `outputs/prepositionnement_resume.csv`.
+
 
 ### Fiche G — Pages annexes Streamlit (T4.8) 🟡
 
