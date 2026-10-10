@@ -29,3 +29,8 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local workspace backups & extracted challenge archive
+_local_backup/
+ENEDIS-*/
+PLAN_EQUIPE_DEFI_ENEDIS.md
