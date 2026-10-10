@@ -37,7 +37,7 @@
 |---|---|---|---|
 | **A** — Diapositives du pitch | 🔴 obligatoire | 60 min | |
 | **B** — README final | 🔴 obligatoire | 40 min | |
-| **C** — Script de démo + vidéo de secours | 🔴 obligatoire | 30 min | |
+| **C** — Script de démo + vidéo de secours | 🔴 obligatoire | 30 min | ATAE |
 | **D** — Stress tests S1–S5 + 2e vague (robustesse, critère du jury) | 🔴 obligatoire | 50 min | |
 | **E** — Réglage α / β sur les crises d'apprentissage | 🟠 fort impact | 30 min | |
 | **F** — Carte de risque + prépositionnement p-médiane | 🟡 bonus | 60 min | |
