@@ -65,6 +65,15 @@ def travail_max_sans_pause_h(res: SimResult) -> float:
     return round(pire / 60, 2)
 
 
+def t_retablissement(resolus: pd.DataFrame, part: float) -> float:
+    """Heure (depuis le début de crise) à laquelle `part` des clients coupés sont rétablis."""
+    if resolus.empty:
+        return 0.0
+    r = resolus.sort_values("t_resolution")
+    cumul = r["nb_clients"].cumsum() / r["nb_clients"].sum()
+    return float(r.loc[cumul >= part, "t_resolution"].iloc[0] / 60)
+
+
 def calculer_kpi(res: SimResult) -> dict:
     inc = res.incidents.copy()
     resolus = inc.dropna(subset=["t_resolution"])
@@ -110,6 +119,8 @@ def calculer_kpi(res: SimResult) -> dict:
         "part_trajet_pct": float(100 * temps_trajet / (temps_trajet + temps_chantier)) if temps_chantier else 0.0,
         "depassements_amplitude": depassements_amplitude(res),
         "non_resolus": int(res.metadata.get("non_resolus", 0)),
+        "attente_p90_sensible_h": float(attente_h[sens].quantile(0.9)) if sens.any() else 0.0,   # V2 : stable
+        "retablis_95pct_h": t_retablissement(resolus, 0.95),                     # V2 : plus stable que la fin
         "nb_pauses": int(res.metadata.get("nb_pauses", 0)),                       # V2
         "fatigue_moyenne": float(res.metadata.get("fatigue_moyenne", 1.0)),       # V2
         "travail_max_sans_pause_h": travail_max_sans_pause_h(res),                # V2

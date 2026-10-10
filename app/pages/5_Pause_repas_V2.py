@@ -26,7 +26,7 @@ st.caption("Hypothèse : au-delà de 4h de travail sans pause, chaque heure allo
            "La pause (45 min, sur place, jamais pendant un chantier) remet le compteur à zéro. "
            "Le Code du travail impose déjà une pause après 6h de travail effectif : la V1 ne la modélisait pas.")
 
-NOMS = {"sans_pause": "Sans pause (V1)", "pause_fixe": "Pause fixe à 4h", "pause_intelligente": "Pause intelligente"}
+NOMS = {"sans_pause": "Sans pause", "pause_fixe": "Pause fixe à 4h", "pause_intelligente": "Pause intelligente"}
 with st.sidebar:
     crises = lister_crises()
     crise = st.selectbox("Crise", crises, index=crises.index("CRISE_024") if "CRISE_024" in crises else 0)
@@ -35,6 +35,8 @@ with st.sidebar:
     duree_pause = st.slider("Durée de la pause (min)", 20, 60, 45, 5)
     rotation = st.selectbox("Relève des équipes", list(ROTATIONS), index=1,
                             help="Sans relève, toutes les équipes démarrent à H0 et se reposent en même temps.")
+    mode_v2 = st.selectbox("Pause retenue pour la V2", ["pause_intelligente", "pause_fixe"],
+                           format_func=lambda m: NOMS[m])
 
 
 @st.cache_data(show_spinner=False)
@@ -49,11 +51,66 @@ with st.spinner("Simulation des 3 modes…"):
     resultats = {m: simuler(crise, strategie, m, pente, duree_pause, rotation) for m in MODES}
     v1 = simuler(crise, strategie, "sans_pause", 0.0, duree_pause, "aucune")[1]   # V1 : ni pause, ni relève
 
-st.markdown(f"**Référence V1** (sans pause, sans relève, sans fatigue) : "
-            f"{v1['clients_heures']:,.0f} clients·heures · attente max sensible {v1['attente_max_sensible_h']:.1f} h · "
-            f"**{v1['heures_sans_equipe_active']:.1f} h sans aucune équipe au travail** alors que des incidents "
-            f"attendent.".replace(",", " "))
+# --------------------------------------------------------------------------- de la V1 à la V2, étape par étape
+ETAPES = [
+    ("① V1 (page Salle de crise express)", "sans_pause", 0.0, "aucune"),
+    (f"② V1 + fatigue {pente:.0%}/h (plus réaliste)", "sans_pause", pente, "aucune"),
+    (f"③ + {NOMS[mode_v2].lower()}", mode_v2, pente, "aucune"),
+    (f"④ + relève « {rotation} » (sans pause)", "sans_pause", pente, rotation),
+    ("⑤ V2 complète (pause + relève)", mode_v2, pente, rotation),
+]
+INDIC = {
+    "clients_heures": ("Clients·heures", "{:,.0f}"),
+    "attente_moy_sensible_h": ("Attente moy. sensible (h)", "{:.1f}"),
+    "attente_p90_sensible_h": ("Attente 90 % sensibles (h)", "{:.1f}"),
+    "attente_max_sensible_h": ("Attente max sensible (h)", "{:.1f}"),
+    "pct_clients_retablis_4h": ("Rétablis < 4h (%)", "{:.0f}"),
+    "retablis_95pct_h": ("95 % rétablis à (h)", "{:.0f}"),
+    "fin_crise_h": ("Fin de crise (h)", "{:.0f}"),
+    "heures_sans_equipe_active": ("Heures sans équipe active", "{:.1f}"),
+}
 
+
+def tableau_etapes(kpis: list[dict]) -> pd.DataFrame:
+    lignes = []
+    for (nom, *_), k in zip(ETAPES, kpis, strict=True):
+        ligne = {"Étape": nom}
+        for cle, (lib, fmt) in INDIC.items():
+            ligne[lib] = fmt.format(k[cle]).replace(",", " ")
+        ligne["Écart vs V1"] = f"{100 * (k['clients_heures'] / kpis[0]['clients_heures'] - 1):+.1f} %"
+        lignes.append(ligne)
+    return pd.DataFrame(lignes).set_index("Étape")
+
+
+st.subheader(f"De la V1 à la V2, étape par étape — {crise}, stratégie {strategie}")
+kpis_etapes = [simuler(crise, strategie, m, pt, duree_pause, rot)[1] for _, m, pt, rot in ETAPES]
+st.dataframe(tableau_etapes(kpis_etapes), use_container_width=True)
+st.caption("La ligne ① est identique à la page Salle de crise express (mêmes règles, même stratégie). "
+           "« Attente max » et « Fin de crise » dépendent d'UN seul incident (pris juste avant ou juste après "
+           "un repos : ±11h) : sur une crise, préférez l'attente moyenne, l'attente à 90 % et « 95 % rétablis ».")
+
+
+@st.cache_data(show_spinner=False)
+def etapes_moyennes(strategie: str, pente: float, duree: int, rotation: str, mode_v2: str, n: int) -> list[dict]:
+    from crise.benchmark import lancer
+
+    cls = resoudre_strategie(strategie)
+    out = []
+    for _, m, pt, rot in ETAPES:
+        p = params_mode(m, pt, rot)
+        p["pause"] = {**p["pause"], "duree_min": duree}
+        kpi, _ = lancer(list(range(1, n + 1)), {strategie: cls}, params=p, n_jobs=2)
+        out.append(kpi.mean(numeric_only=True).to_dict())
+    return out
+
+
+if st.button("Calculer le même tableau en moyenne sur 20 crises (≈ 1 min)"):
+    with st.spinner("Calcul sur 20 crises…"):
+        st.dataframe(tableau_etapes(etapes_moyennes(strategie, pente, duree_pause, rotation, mode_v2, 20)),
+                     use_container_width=True)
+    st.caption("Moyenne des crises 1 à 20 : ce sont ces chiffres-là qu'il faut citer au jury.")
+
+st.subheader(f"Les 3 modes de pause — fatigue {pente:.0%}/h, relève « {rotation} »")
 ref = resultats["sans_pause"][1]["clients_heures"]
 cols = st.columns(3)
 for col, m in zip(cols, MODES, strict=True):
@@ -69,8 +126,8 @@ for col, m in zip(cols, MODES, strict=True):
         st.metric("Heures sans aucune équipe au travail", f"{k['heures_sans_equipe_active']:.1f} h",
                   f"{k['heures_sans_equipe_active'] - v1['heures_sans_equipe_active']:+.1f} h vs V1",
                   delta_color="inverse")
-        st.caption(f"Attente max sensible {k['attente_max_sensible_h']:.1f} h · fin de crise "
-                   f"{k['fin_crise_h']:.0f} h · dépassements d'amplitude : {k['depassements_amplitude']}")
+        st.caption(f"Attente moyenne sensible {k['attente_moy_sensible_h']:.1f} h · 95 % rétablis à "
+                   f"{k['retablis_95pct_h']:.0f} h · dépassements d'amplitude : {k['depassements_amplitude']}")
 
 st.subheader("Clients coupés au fil de la crise")
 fig = go.Figure()

@@ -98,3 +98,13 @@ def test_rotation_desactivee_par_defaut():
     b = run(rotation={"actif": False})
     assert a.metadata["clients_heures"] == b.metadata["clients_heures"]
     assert "astreinte" not in set(a.activites["type"])
+
+
+def test_t_retablissement():
+    import pandas as pd
+
+    from crise.kpi import t_retablissement
+
+    r = pd.DataFrame({"t_resolution": [60, 120, 600], "nb_clients": [50, 45, 5]})
+    assert t_retablissement(r, 0.95) == pytest.approx(2.0)      # 95 % des clients rétablis à 2h
+    assert t_retablissement(r, 1.0) == pytest.approx(10.0)
