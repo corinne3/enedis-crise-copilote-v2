@@ -2,7 +2,7 @@
 import subprocess
 from pathlib import Path
 
-import imageio_ffmpeg
+import pytest
 
 
 def test_script_demo_existe_et_complet():
@@ -28,6 +28,7 @@ def test_video_demo_existe_et_conforme():
     assert 0.1 < size_mb <= 50.0, f"La taille de la vidéo ({size_mb:.2f} Mo) doit être entre 0.1 et 50 Mo."
 
     # Vérification de l'intégrité et de la durée via ffmpeg
+    imageio_ffmpeg = pytest.importorskip("imageio_ffmpeg")
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [ffmpeg_exe, "-v", "error", "-i", str(video_path), "-f", "null", "-"]
     res = subprocess.run(cmd, capture_output=True, text=True)
