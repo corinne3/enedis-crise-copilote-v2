@@ -29,8 +29,8 @@ Tableau de suivi des lots et des tâches établi pour la coordination de l'équi
 
 ### LOT 2 — Moteur d'optimisation & explicabilité (P2)
 - [x] **T2.1** : Jeu factice 3 équipes / 6 incidents (§4)
-- [ ] **T2.2** : `wspt_hongrois.py` : score WSPT vectorisé et algorithme hongrois
-- [ ] **T2.3** : Faisabilité et respect amplitude restante
+- [x] **T2.2** : `wspt_hongrois.py` : score WSPT vectorisé et algorithme hongrois
+- [x] **T2.3** : Faisabilité et respect amplitude restante
 - [ ] **T2.4** : Branchement réel simulateur sur CRISE_001
 - [ ] **T2.5** : `explication.py` : facteurs, contributions %, contrefactuel, confiance, export JSON
 - [ ] **T2.6** : v2 : anticipation 30 min + réserve anti-piège 8h
