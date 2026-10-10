@@ -7,6 +7,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class EtatEquipe(StrEnum):
@@ -92,6 +96,16 @@ class EtatSimulation:
     incidents_en_attente: list[Incident]
     toutes_equipes: list[Equipe]
     params: dict               # amplitude, repos, alpha, beta, vitesses…
+
+
+@dataclass
+class SimResult:
+    """Produit par le simulateur, utilisé par KPI et UI (§4.4)."""
+    incidents: pd.DataFrame
+    activites: pd.DataFrame
+    decisions: pd.DataFrame
+    serie: pd.DataFrame
+    metadata: dict = field(default_factory=dict)
 
 
 # Colonnes attendues des 4 tables de SimResult (§4.4) — utilisées par les tests et les données factices.
