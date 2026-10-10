@@ -59,7 +59,7 @@ Tableau de suivi des lots et des tâches établi pour la coordination de l'équi
 
 ### LOT 5 — Copilote IA, documentation, pitch (P5) · *Coordination*
 - [x] **T5.1** : Lancement Ollama, connexion dépôt GitHub, initialisation tableau de suivi des tâches
-- [ ] **T5.2** : `copilote/llm.py` : prompt système strict, reformulateur JSON, garde-fou anti-hallucination regex, cache
+- [x] **T5.2** : `copilote/llm.py` : prompt système strict, reformulateur JSON, garde-fou anti-hallucination regex, cache (Validé)
 - [ ] **T5.3** : `copilote/templates.py` : f-strings de secours pour fiche décision & point préfecture
 - [ ] **T5.4** : Pré-génération des fiches copilote pour la crise de démo
 - [ ] **T5.5** : Rédaction complète du `README.md`
