@@ -12,11 +12,13 @@ import logging
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pydeck as pdk
 import streamlit as st
 
 from crise.benchmark import resoudre_strategie, resumer
 from crise.config import charger_config, chemin_projet
-from crise.copilote.templates import fiche_arbitrage
+from crise.copilote.templates import fiche_arbitrage, point_situation
+from crise.instant import equipes_a, incidents_a, ligne_serie
 from crise.kpi import calculer_kpi
 from crise.models import lister_crises
 from crise.simulateur import parametres_simulation, simuler_crise
@@ -121,27 +123,67 @@ st.caption("L'aire sous chaque courbe = clients·heures de coupure. "
 # --------------------------------------------------------------------------- détail d'une stratégie
 detail = st.selectbox("Détail de la stratégie", choix, index=len(choix) - 1, format_func=lambda c: NOMS.get(c, c))
 res, _ = resultats[detail]
-g1, g2 = st.columns(2)
-with g1:
-    st.markdown("**Équipes dans le temps**")
-    s = res.serie
-    fig2 = go.Figure()
-    for col_, nom in [("equipes_occupees", "en intervention"), ("equipes_repos", "retour / repos"),
-                      ("equipes_disponibles", "disponibles"), ("equipes_hs", "hors service")]:
-        fig2.add_trace(go.Scatter(x=s["t"] / 60, y=s[col_], stackgroup="a", name=nom, mode="none"))
-    fig2.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10), xaxis_title="Heures",
-                       legend=dict(orientation="h"))
-    st.plotly_chart(fig2, use_container_width=True)
-with g2:
-    st.markdown("**Carte des incidents (couleur = attente avant affectation)**")
-    inc = res.incidents.assign(attente_h=lambda d: (d.t_affectation - d.t_apparition) / 60)
-    carte = getattr(px, "scatter_map", None)               # plotly ≥ 5.24 ; sinon ancienne API mapbox
-    fn, style = (carte, "map_style") if carte else (px.scatter_mapbox, "mapbox_style")
-    fig3 = fn(inc, lat="lat", lon="lon", color="attente_h", size="nb_clients", size_max=12,
-              hover_name="commune", hover_data={"nb_clients": True, "sensible": True},
-              color_continuous_scale="OrRd", zoom=7, height=320)
-    fig3.update_layout(**{style: "carto-positron"}, margin=dict(l=0, r=0, t=0, b=0))
+st.markdown("**Équipes dans le temps**")
+s = res.serie
+fig2 = go.Figure()
+for col_, nom in [("equipes_occupees", "en intervention"), ("equipes_repos", "retour / repos"),
+                  ("equipes_disponibles", "disponibles"), ("equipes_hs", "hors service")]:
+    fig2.add_trace(go.Scatter(x=s["t"] / 60, y=s[col_], stackgroup="a", name=nom, mode="none"))
+fig2.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), xaxis_title="Heures",
+                   legend=dict(orientation="h"))
+st.plotly_chart(fig2, use_container_width=True)
+
+# --------------------------------------------------------------------------- carte animée (T4.2)
+st.subheader("Carte de la crise à l'instant t")
+fin_h = float(res.serie["t"].max() / 60)
+t_h = st.slider("Heure depuis le début de la crise", 0.0, fin_h, min(6.0, fin_h), 0.5)
+t_min = t_h * 60
+inc_t = incidents_a(res, t_min)
+eq_t = equipes_a(res, t_min)
+COUL = {"à venir": [180, 180, 180, 60], "en attente": [214, 40, 40, 220],
+        "en intervention": [242, 165, 65, 230], "rétabli": [42, 157, 143, 140]}
+inc_t["couleur"] = inc_t["etat"].map(COUL)
+inc_t["rayon"] = 400 + 25 * inc_t["nb_clients"]
+inc_t["contour"] = inc_t["sensible"].map(lambda v: [128, 0, 200, 255] if v else [0, 0, 0, 0])
+eq_t["couleur"] = eq_t["activite"].map({"trajet": [30, 90, 200, 255], "chantier": [30, 90, 200, 255],
+                                        "retour": [120, 140, 160, 255], "repos": [90, 90, 90, 255],
+                                        "hors_service": [0, 0, 0, 255]}).apply(
+    lambda c: c if isinstance(c, list) else [30, 160, 255, 255])
+c1, c2, c3, c4 = st.columns(4)
+for col_, etat in zip((c1, c2, c3, c4), ("en attente", "en intervention", "rétabli", "à venir"), strict=True):
+    n = inc_t["etat"].eq(etat)
+    col_.metric(etat.capitalize(), f"{int(n.sum())} incidents", f"{int(inc_t.loc[n, 'nb_clients'].sum())} clients",
+                delta_color="off")
+sans_fond = st.checkbox("Vue sans fond de carte (si la carte reste grise)")
+if sans_fond:
+    fig3 = px.scatter(inc_t[inc_t["etat"] != "à venir"], x="lon", y="lat", color="etat", size="nb_clients",
+                      size_max=14, hover_name="commune", height=520,
+                      color_discrete_map={"en attente": "#d62828", "en intervention": "#f2a541", "rétabli": "#2a9d8f"})
+    fig3.add_scatter(x=eq_t["lon"], y=eq_t["lat"], mode="markers", name="équipes",
+                     marker=dict(symbol="triangle-up", size=9, color="#1e5ac8"), text=eq_t["id_equipe"])
+    fig3.update_yaxes(scaleanchor="x", scaleratio=1.37)
+    fig3.update_layout(margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig3, use_container_width=True)
+else:
+    trajets = eq_t[eq_t["activite"] == "trajet"]
+    couches = [
+        pdk.Layer("ScatterplotLayer", inc_t, get_position="[lon, lat]", get_fill_color="couleur",
+                  get_line_color="contour", line_width_min_pixels=2, stroked=True, get_radius="rayon",
+                  pickable=True),
+        pdk.Layer("LineLayer", trajets, get_source_position="[lon, lat]",
+                  get_target_position="[lon_cible, lat_cible]", get_color=[30, 90, 200, 160], get_width=2),
+        pdk.Layer("ScatterplotLayer", eq_t, get_position="[lon, lat]", get_fill_color="couleur",
+                  get_radius=1200, radius_min_pixels=4, pickable=True),
+    ]
+    st.pydeck_chart(pdk.Deck(
+        layers=couches, initial_view_state=pdk.ViewState(latitude=43.3, longitude=1.1, zoom=7.2),
+        tooltip={"text": "{commune}{id_equipe}\n{etat}{activite}\n{nb_clients} clients"}, height=520))
+st.caption("Rouge = en attente · orange = en intervention · vert = rétabli · contour violet = client sensible · "
+           "bleu = équipes (traits = trajets en cours). Taille = nombre de clients.")
+st.info(point_situation(int(t_min), ligne_serie(res, t_min),
+                        sensibles_attente=int((inc_t["etat"].eq("en attente") & inc_t["sensible"]).sum()),
+                        tension=inc_t[inc_t["etat"] == "en attente"]["departement"].value_counts()
+                        .head(2).index.tolist()))
 
 st.markdown("**Gantt des équipes**")
 act = res.activites.copy()
