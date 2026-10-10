@@ -49,10 +49,10 @@
 
 | Fichier | Contenu | Taille | Clé |
 |---|---|---|---|
-| `agents_v2.xlsx` | 18 sites opérationnels, `nb_equipes` par site | 18 lignes | `id_site` |
-| `poste_v2.xlsx` | Postes : commune, département, lat/lon (WGS84) + Lambert 93, `nb_clients` (5 à 150), `poste_avec_client_sensible` (0/1) | 33 288 lignes | `id_poste` |
+| `agents_v2.csv` | 18 sites opérationnels, `nb_equipes` par site | 18 lignes | `id_site` |
+| `poste_v2.csv` | Postes : commune, département, lat/lon (WGS84) + Lambert 93, `nb_clients` (5 à 150), `poste_avec_client_sensible` (0/1) | 33 288 lignes | `id_poste` |
 | `coupures_v2_100_crises.csv` | 100 crises simulées : `numero_crise`, `id_incident`, `id_poste`, `causeInterruption`, `dateHeureIncident`, `dureeDepannage` | 15 681 lignes | `id_incident` |
-| `insee.csv` (si disponible) | Référentiel des communes | ≈ 1 365 lignes | `code_insee` |
+| `insee_v2.csv` | Référentiel des communes | ≈ 1 365 lignes | `code_insee` |
 
 Relations : `coupures.id_poste → poste.id_poste` ; `poste.code_insee → insee.code_insee` ; distances calculées entre `agents.lat/lon` et `poste.lat/lon`.
 
@@ -76,14 +76,15 @@ Relations : `coupures.id_poste → poste.id_poste` ; `poste.code_insee → insee
 
 | # | Piège | Correction |
 |---|---|---|
-| P1 | **`agents_v2.xlsx` : 9 longitudes sur 18 ont été converties en dates par Excel** (format `m.yyyy`). Exemple : Foix = `6060-01-01` au lieu de `1.6060` | Si la cellule est une date : `lon = 1 + année / 10000`. Contrôle : Toulouse ≈ 1.42, Muret ≈ 1.33, Lavelanet ≈ 1.85 |
-| P2 | Latitudes des agents stockées en **texte** | `float(str.replace(',', '.'))` |
+| P1 | ~~Longitudes converties en dates par Excel~~ : **corrigé dans les versions CSV fournies** | Garde-fou conservé : contrôle de la zone géographique (lat 42,4–44,3, lon −0,5–2,4) |
+| P2 | Tous les CSV sont lus en texte, puis typés explicitement | `float(str.replace(',', '.'))` (virgule décimale tolérée) |
 | P3 | CSV des coupures : séparateur `;` + BOM UTF-8 | `pd.read_csv(sep=';', encoding='utf-8-sig')` |
 | P4 | Date au format `JJ/MM/AAAA HH:MM` | `pd.to_datetime(..., dayfirst=True)` |
 | P5 | `dureeDepannage` est du texte (`"4h"`) | `int(s.rstrip('h')) * 60`, en minutes |
 | P6 | **5 incidents pointent vers des postes inexistants** (`POSTE_033289` à `POSTE_033298`) | **Les exclure et l'écrire dans le journal** (0,03 % des données). On n'invente pas de coordonnées |
 | P7 | `code_insee` stocké en entier (`9001` au lieu de `09001`) | `str.zfill(5)` si on fait la jointure |
 | P8 | **La fonction objectif est écrite « maximiser Σ Ni×Ti »** | C'est **minimiser** (voir §2). À dire au pitch |
+| P9 | **43 postes sont touchés 2 fois dans la même crise** | Conservés et signalés (`rang_sur_poste`, `nb_incidents_poste_crise`). Le simulateur et les KPI ne doivent pas compter deux fois les clients si deux incidents sont ouverts en même temps sur le même poste |
 
 ### 1.5 Vérification déjà faite : la durée ne dépend pas de la cause
 
@@ -516,7 +517,7 @@ s.c.  Σ_k x_dk = 1                         ∀d
 | Langage | **Python 3.11+** | PSF | Windows / macOS / Linux |
 | Environnement | `venv` + `pip` (ou **uv**, plus rapide) | MIT / Apache-2.0 | |
 | Données | **pandas**, **numpy**, **pyarrow** (parquet) | BSD / Apache-2.0 | |
-| Lecture Excel | **openpyxl** | MIT | nécessaire pour corriger le piège P1 |
+| Lecture Excel | **openpyxl** | MIT | facultatif (les données sont maintenant en CSV) |
 | Configuration | **PyYAML** | MIT | `config/default.yaml` |
 | Algorithme hongrois | **scipy** (`linear_sum_assignment`) | BSD | |
 | Optimisation (MILP) | **OR-Tools** (`pywraplp` + SCIP/CBC inclus) | Apache-2.0 | aucun solveur à installer en plus |

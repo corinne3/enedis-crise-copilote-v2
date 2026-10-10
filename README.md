@@ -20,7 +20,7 @@ pytest -q                      # doit afficher "passed"
 ```
 
 Déposer les fichiers fournis par Enedis dans `data/raw/` (ils ne sont **pas** versionnés) :
-`agents_v2.xlsx`, `poste_v2.xlsx`, `coupures_v2_100_crises.csv`.
+`agents_v2.csv`, `poste_v2.csv`, `insee_v2.csv`, `coupures_v2_100_crises.csv` (noms exacts).
 
 ## Exécution
 
