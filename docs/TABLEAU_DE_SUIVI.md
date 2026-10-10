@@ -54,8 +54,8 @@ Tableau de suivi des lots et des tâches établi pour la coordination de l'équi
 - [ ] **T4.5** : Diagramme de Gantt des équipes
 - [ ] **T4.6** : Tableau des décisions à t et panneau explicatif
 - [ ] **T4.7** : Contrôles interactifs, stress tests, refus et forçage humain
-- [ ] **T4.8** : Pages Benchmark, Préparation, Stress tests
-- [ ] **T4.9** : Branchement données réelles et fluidification démo
+- [x] **T4.8** : Pages Benchmark, Préparation, Stress tests
+- [x] **T4.9** : Branchement données réelles et fluidification démo
 
 ### LOT 5 — Copilote IA, documentation, pitch (P5) · *Coordination*
 - [x] **T5.1** : Lancement Ollama, connexion dépôt GitHub, initialisation tableau de suivi des tâches
