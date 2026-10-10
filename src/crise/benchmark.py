@@ -178,6 +178,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--monte-carlo", type=int, default=0, help="nombre de tirages (0 = nominal)")
     ap.add_argument("--jobs", type=int, default=-1)
     ap.add_argument("--suffixe", default="")
+    ap.add_argument("--stress", action="store_true", help="lance également les stress tests S1 à S5")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logging.getLogger("crise.simulateur").setLevel(logging.ERROR)
@@ -195,6 +196,16 @@ def main(argv: list[str] | None = None) -> None:
     print("\n=== Résumé (moyennes par stratégie) ===")
     print(resume.T.to_string())
     print(f"\nFichiers écrits dans {dossier}")
+    if args.stress:
+        from crise.scenarios import evaluer_scenarios
+
+        print("\n=== Lancement des stress tests S1 à S5 ===")
+        _, stress_resume = evaluer_scenarios(
+            crises=parser_crises(args.crises),
+            strategies=strategies,
+            n_jobs=args.jobs,
+        )
+        print(stress_resume.to_string(index=False))
 
 
 if __name__ == "__main__":

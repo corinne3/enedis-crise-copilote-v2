@@ -38,13 +38,13 @@ Tableau de suivi des lots et des tâches établi pour la coordination de l'équi
 - [ ] **T2.8** : Section « Moteur & explicabilité » du README
 
 ### LOT 3 — Évaluation, robustesse, prépositionnement (P3)
-- [ ] **T3.1** : `kpi.py` : Σ N·T, % rétablis à 2h/4h/8h, attente max sensibles, Gini territorial
-- [ ] **T3.2** : Split apprentissage / test (1-80 / 81-100) + fonction courbe clients coupés
+- [x] **T3.1** : `kpi.py` : Σ N·T, % rétablis à 2h/4h/8h, attente max sensibles, Gini territorial
+- [x] **T3.2** : Split apprentissage / test (1-80 / 81-100) + fonction courbe clients coupés
 - [x] **T3.3** : Carte de risque : KDE pondérée sur crises apprentissage
 - [x] **T3.4** : `prepositionnement.py` : K-Means 200 zones + MILP p-médiane capacitaire
-- [ ] **T3.5** : `benchmark.py` : banc d'essai parallélisé joblib 100 crises
-- [ ] **T3.6** : `scenarios.py` (stress tests) : S1 à S5
-- [ ] **T3.7** : Lancement banc d'essai complet + extraction graphiques et KPI clés
+- [x] **T3.5** : `benchmark.py` : banc d'essai parallélisé joblib 100 crises
+- [x] **T3.6** : `scenarios.py` (stress tests) : S1 à S5
+- [x] **T3.7** : Lancement banc d'essai complet + extraction graphiques et KPI clés
 
 ### LOT 4 — Interface Streamlit « Salle de crise » (P4)
 - [x] **T4.1** : Squelette multi-pages, mise en page et générateur SimResult factice
