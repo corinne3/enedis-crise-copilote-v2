@@ -4,8 +4,9 @@ chemins:
   clean: data/clean
   outputs: outputs
 fichiers_bruts:
-  agents: agents_v2.xlsx
-  postes: poste_v2.xlsx
+  agents: agents_v2.csv
+  postes: poste_v2.csv
+  insee: insee_v2.csv
   coupures: coupures_v2_100_crises.csv
 trajet:
   coef_detour: 1.3
