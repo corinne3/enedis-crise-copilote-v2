@@ -1,7 +1,9 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
+from crise.config import chemin_projet
 from crise.models import Site, charger_scenario
 from crise.prepositionnement import (
     carte_risque,
@@ -11,7 +13,10 @@ from crise.prepositionnement import (
     selectionner_candidats,
 )
 
+CLEAN = chemin_projet("data", "clean")
 
+
+@pytest.mark.skipif(not (CLEAN / "incidents.parquet").exists(), reason="lancer python -m crise.data.nettoyage")
 def test_carte_risque_structure():
     # Test sur un petit sous-ensemble de crises d'apprentissage pour être rapide
     df = carte_risque(crises=[1, 2], n_clusters=20)
@@ -54,6 +59,33 @@ def test_selectionner_candidats():
     assert candidats[1] == (43.5, 1.5)
 
 
+def test_positions_pmediane_et_kmeans_synthetique():
+    """Vérifie le MILP OR-Tools et K-Means sans dépendre des données réelles Enedis."""
+    sites = [
+        Site(id_site="SITE_01", commune="Foix", lat=42.96, lon=1.60, nb_equipes=3),
+        Site(id_site="SITE_02", commune="Auch", lat=43.64, lon=0.58, nb_equipes=2),
+    ]
+    zones = pd.DataFrame({
+        "lat": [42.97, 43.65, 43.10],
+        "lon": [1.61, 0.59, 1.20],
+        "poids": [300.0, 200.0, 100.0],
+    })
+    pos_pmed = positions_pmediane(zones, sites, n_equipes=5, n_avances=2, max_par_point=4)
+    assert len(pos_pmed) == 5
+    for eq_id, (lat, lon) in pos_pmed.items():
+        assert eq_id.startswith("SITE_")
+        assert 42.0 <= lat <= 45.0
+        assert -0.5 <= lon <= 4.0
+
+    pos_km = positions_kmeans(zones, sites, n_equipes=5)
+    assert len(pos_km) == 5
+    for eq_id, (lat, lon) in pos_km.items():
+        assert eq_id.startswith("SITE_")
+        assert 42.0 <= lat <= 45.0
+        assert -0.5 <= lon <= 4.0
+
+
+@pytest.mark.skipif(not (CLEAN / "incidents.parquet").exists(), reason="lancer python -m crise.data.nettoyage")
 def test_positions_pmediane_et_kmeans_sur_scenario_reel():
     sites, equipes, _ = charger_scenario(1)
     # Zones réduites pour vitesse de test unitaire
@@ -82,6 +114,7 @@ def test_positions_pmediane_et_kmeans_sur_scenario_reel():
         assert -0.5 <= lon <= 4.0
 
 
+@pytest.mark.skipif(not (CLEAN / "incidents.parquet").exists(), reason="lancer python -m crise.data.nettoyage")
 def test_evaluer_prepositionnement(tmp_path: Path):
     from crise.prepositionnement import evaluer_prepositionnement
 
@@ -99,5 +132,3 @@ def test_evaluer_prepositionnement(tmp_path: Path):
     assert (tmp_path / "carte_risque.csv").exists()
     assert (tmp_path / "positions_pmediane.csv").exists()
     assert (tmp_path / "prepositionnement.csv").exists()
-
-
